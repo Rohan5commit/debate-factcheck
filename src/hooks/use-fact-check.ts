@@ -9,6 +9,7 @@ interface UseFactCheckReturn {
   error: string | null;
   checkLive: (text: string) => Promise<void>;
   checkPrep: (text: string) => Promise<void>;
+  retryLast: () => Promise<void>;
   clearResults: () => void;
 }
 
@@ -17,44 +18,57 @@ export function useFactCheck(): UseFactCheckReturn {
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const lastRequestRef = useRef<{ text: string; mode: "live" | "prep" } | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const checkLive = useCallback(async (text: string) => {
     if (!text.trim()) return;
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-    abortControllerRef.current = new AbortController();
 
-    setIsChecking(true);
-    setError(null);
+    return new Promise<void>((resolve) => {
+      debounceTimerRef.current = setTimeout(async () => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+        abortControllerRef.current = new AbortController();
 
-    try {
-      const response = await fetch("/api/check/live", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-        signal: abortControllerRef.current.signal,
-      });
+        lastRequestRef.current = { text, mode: "live" };
+        setIsChecking(true);
+        setError(null);
 
-      if (!response.ok) {
-        throw new Error(`Check failed: ${response.statusText}`);
-      }
+        try {
+          const response = await fetch("/api/check/live", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+            signal: abortControllerRef.current.signal,
+          });
 
-      const data = await response.json();
-      setResults((prev) => [...data.results, ...prev]);
-    } catch (e) {
-      if (e instanceof Error && e.name !== "AbortError") {
-        setError(e.message);
-      }
-    } finally {
-      setIsChecking(false);
-    }
+          if (!response.ok) {
+            throw new Error(`Check failed: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          setResults((prev) => [...data.results, ...prev]);
+        } catch (e) {
+          if (e instanceof Error && e.name !== "AbortError") {
+            setError(e.message);
+          }
+        } finally {
+          setIsChecking(false);
+          resolve();
+        }
+      }, 300);
+    });
   }, []);
 
   const checkPrep = useCallback(async (text: string) => {
     if (!text.trim()) return;
 
+    lastRequestRef.current = { text, mode: "prep" };
     setIsChecking(true);
     setError(null);
     setResults([]);
@@ -81,9 +95,21 @@ export function useFactCheck(): UseFactCheckReturn {
     }
   }, []);
 
+  const retryLast = useCallback(async () => {
+    if (!lastRequestRef.current) return;
+
+    const { text, mode } = lastRequestRef.current;
+    if (mode === "live") {
+      await checkLive(text);
+    } else {
+      await checkPrep(text);
+    }
+  }, [checkLive, checkPrep]);
+
   const clearResults = useCallback(() => {
     setResults([]);
     setError(null);
+    lastRequestRef.current = null;
   }, []);
 
   return {
@@ -92,6 +118,7 @@ export function useFactCheck(): UseFactCheckReturn {
     error,
     checkLive,
     checkPrep,
+    retryLast,
     clearResults,
   };
 }

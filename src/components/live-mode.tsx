@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
-import { BrowserSupportWarning } from "./browser-support-warning";
+import { BrowserSupportWarning, getBrowserInfo } from "./browser-support-warning";
 
 export function LiveMode() {
   const {
@@ -17,7 +17,7 @@ export function LiveMode() {
     resetTranscript,
   } = useSpeechRecognition();
 
-  const { results, isChecking, error: checkError, checkLive } = useFactCheck();
+  const { results, isChecking, error: checkError, checkLive, retryLast } = useFactCheck();
   const checkedSentencesRef = useRef<Set<string>>(new Set());
   const lastCheckedRef = useRef("");
 
@@ -50,13 +50,15 @@ export function LiveMode() {
     lastCheckedRef.current = "";
   };
 
+  const browser = getBrowserInfo();
+
   if (!isSupported) {
     return <BrowserSupportWarning />;
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={isListening ? stopListening : startListening}
           className={`px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -79,11 +81,24 @@ export function LiveMode() {
             Listening...
           </span>
         )}
+        <span className="text-xs text-gray-400 ml-auto">
+          {browser.name} detected
+        </span>
       </div>
 
       {(speechError || checkError) && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-          {speechError || checkError}
+          <div className="flex items-start justify-between">
+            <span>{speechError || checkError}</span>
+            {checkError && (
+              <button
+                onClick={retryLast}
+                className="text-xs underline hover:no-underline ml-2"
+              >
+                Retry
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -106,6 +121,12 @@ export function LiveMode() {
           <FactCheckCard key={result.id} result={result} />
         ))}
       </div>
+
+      {results.length > 0 && (
+        <p className="text-xs text-gray-400 text-center">
+          {results.length} sentence{results.length !== 1 ? "s" : ""} checked
+        </p>
+      )}
     </div>
   );
 }

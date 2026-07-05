@@ -4,9 +4,10 @@ import type { Source } from "@/types";
 
 interface SourceCardProps {
   source: Source;
+  index: number;
 }
 
-export function SourceCard({ source }: SourceCardProps) {
+export function SourceCard({ source, index }: SourceCardProps) {
   const credibilityColors = {
     high: "bg-green-100 text-green-800",
     medium: "bg-yellow-100 text-yellow-800",
@@ -21,11 +22,12 @@ export function SourceCard({ source }: SourceCardProps) {
       className="block p-2 rounded border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors text-xs"
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="font-medium text-gray-900 line-clamp-1">
+        <span className="font-medium text-gray-900 line-clamp-1 flex-1 min-w-0">
+          <span className="text-gray-400 mr-1">[{index + 1}]</span>
           {source.title}
         </span>
         <span
-          className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${credibilityColors[source.credibility]}`}
+          className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${credibilityColors[source.credibility]}`}
         >
           {source.credibility}
         </span>
