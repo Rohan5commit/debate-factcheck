@@ -1,0 +1,111 @@
+"use client";
+
+import { useEffect, useRef, useCallback } from "react";
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
+import { useFactCheck } from "@/hooks/use-fact-check";
+import { FactCheckCard } from "./fact-check-card";
+import { BrowserSupportWarning } from "./browser-support-warning";
+
+export function LiveMode() {
+  const {
+    isListening,
+    transcript,
+    isSupported,
+    error: speechError,
+    startListening,
+    stopListening,
+    resetTranscript,
+  } = useSpeechRecognition();
+
+  const { results, isChecking, error: checkError, checkLive } = useFactCheck();
+  const checkedSentencesRef = useRef<Set<string>>(new Set());
+  const lastCheckedRef = useRef("");
+
+  const processTranscript = useCallback(() => {
+    if (!transcript || transcript === lastCheckedRef.current) return;
+
+    const sentences = transcript
+      .split(/(?<=[.!?])\s+/)
+      .filter((s) => s.trim().length > 10);
+
+    const unchecked = sentences.filter(
+      (s) => !checkedSentencesRef.current.has(s)
+    );
+
+    if (unchecked.length > 0) {
+      const textToCheck = unchecked.join(" ");
+      lastCheckedRef.current = transcript;
+      checkLive(textToCheck);
+      unchecked.forEach((s) => checkedSentencesRef.current.add(s));
+    }
+  }, [transcript, checkLive]);
+
+  useEffect(() => {
+    processTranscript();
+  }, [processTranscript]);
+
+  const handleClear = () => {
+    resetTranscript();
+    checkedSentencesRef.current = new Set();
+    lastCheckedRef.current = "";
+  };
+
+  if (!isSupported) {
+    return <BrowserSupportWarning />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={isListening ? stopListening : startListening}
+          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            isListening
+              ? "bg-red-500 text-white hover:bg-red-600"
+              : "bg-blue-500 text-white hover:bg-blue-600"
+          }`}
+        >
+          {isListening ? "Stop Listening" : "Start Listening"}
+        </button>
+        <button
+          onClick={handleClear}
+          className="px-4 py-2 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+        >
+          Clear
+        </button>
+        {isListening && (
+          <span className="flex items-center gap-2 text-sm text-gray-600">
+            <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+            Listening...
+          </span>
+        )}
+      </div>
+
+      {(speechError || checkError) && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {speechError || checkError}
+        </div>
+      )}
+
+      <div className="p-4 bg-gray-50 rounded-lg min-h-[100px]">
+        <p className="text-sm text-gray-500 mb-2">Transcript:</p>
+        <p className="text-gray-900">
+          {transcript || "Start speaking to begin fact-checking..."}
+        </p>
+      </div>
+
+      {isChecking && (
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          Checking facts...
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {results.map((result) => (
+          <FactCheckCard key={result.id} result={result} />
+        ))}
+      </div>
+    </div>
+  );
+}
