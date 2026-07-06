@@ -35,7 +35,7 @@ export function canMakeRequest(provider: string): boolean {
   const limits: Record<string, { max: number; refillMs: number }> = {
     cerebras: { max: 10, refillMs: 6000 },
     nim: { max: 5, refillMs: 12000 },
-    tavily: { max: 10, refillMs: 6000 },
+    serper: { max: 10, refillMs: 6000 },
   };
 
   const limit = limits[provider] ?? { max: 5, refillMs: 12000 };

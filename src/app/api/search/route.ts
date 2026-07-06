@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchWeb } from "@/lib/providers/tavily";
+import { searchWeb } from "@/lib/providers/serper";
 import { logger } from "@/lib/logger";
 
 export async function POST(request: NextRequest) {

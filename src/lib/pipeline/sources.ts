@@ -61,7 +61,7 @@ function getCredibility(url: string): "high" | "medium" | "low" {
 }
 
 export function rankSources(
-  sources: Array<{ title: string; url: string; snippet: string; score: number }>
+  sources: Array<{ title: string; url: string; snippet: string; score?: number }>
 ): Source[] {
   return sources
     .map((s) => ({

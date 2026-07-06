@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { getCerebrasModel } from "@/lib/providers/cerebras";
 import { getNIMModel } from "@/lib/providers/nim";
-import { searchWeb } from "@/lib/providers/tavily";
+import { searchWeb } from "@/lib/providers/serper";
 import { segmentSentences, segmentLines } from "./segment";
 import {
   rankSources,
@@ -59,8 +59,8 @@ async function verifySentence(
 ): Promise<FactCheckResult> {
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  if (!canMakeRequest("tavily")) {
-    logger.warn("Rate limit hit for Tavily search");
+  if (!canMakeRequest("serper")) {
+    logger.warn("Rate limit hit for Serper search");
     return {
       id,
       text: sentence,
