@@ -4,7 +4,7 @@ const cerebras = createCerebras({
   apiKey: process.env.CEREBRAS_API_KEY ?? "",
 });
 
-export function getCerebrasModel(model: string = "llama-3.3-70b") {
+export function getCerebrasModel(model: string = "gpt-oss-120b") {
   return cerebras.chat(model);
 }
 

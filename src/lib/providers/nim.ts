@@ -8,7 +8,7 @@ const nim = createOpenAICompatible({
   },
 });
 
-export function getNIMModel(model: string = "nvidia/llama-3.1-nemotron-70b-instruct") {
+export function getNIMModel(model: string = "meta/llama-3.3-70b-instruct") {
   return nim.chatModel(model);
 }
 
