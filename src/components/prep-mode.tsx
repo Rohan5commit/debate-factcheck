@@ -9,28 +9,31 @@ export function PrepMode() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { results, isChecking, error, checkPrep, retryLast } = useFactCheck();
+  const {
+    results,
+    isChecking,
+    error,
+    errorDetails,
+    checkPrep,
+    retryLast,
+    testApiKeys,
+  } = useFactCheck();
+  const [apiStatus, setApiStatus] = useState<string | null>(null);
+  const [isTestingApi, setIsTestingApi] = useState(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setIsUploading(true);
     setUploadedFile(file);
-
     try {
       const formData = new FormData();
       formData.append("file", file);
-
       const response = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
-
-      if (!response.ok) {
-        throw new Error("Upload failed");
-      }
-
+      if (!response.ok) throw new Error("Upload failed");
       const data = await response.json();
       setInputText(data.text);
     } catch {
@@ -41,17 +44,29 @@ export function PrepMode() {
   };
 
   const handleCheck = () => {
-    if (inputText.trim()) {
-      checkPrep(inputText);
-    }
+    if (inputText.trim()) checkPrep(inputText);
   };
 
   const handleClear = () => {
     setInputText("");
     setUploadedFile(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleTestApi = async () => {
+    setIsTestingApi(true);
+    setApiStatus(null);
+    try {
+      const results = await testApiKeys();
+      const lines = results.map(
+        (r: { provider: string; status: string; message: string }) =>
+          `${r.provider}: ${r.status === "ok" ? "✓" : "✗"} ${r.message}`
+      );
+      setApiStatus(lines.join("\n"));
+    } catch {
+      setApiStatus("Failed to test API keys");
     }
+    setIsTestingApi(false);
   };
 
   const correctCount = results.filter((r) => r.status === "correct").length;
@@ -76,12 +91,34 @@ export function PrepMode() {
         >
           {isUploading ? "Uploading..." : "Upload File"}
         </button>
+        <button
+          onClick={handleTestApi}
+          disabled={isTestingApi}
+          className="px-3 py-2 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-50"
+        >
+          {isTestingApi ? "Testing..." : "Test API Keys"}
+        </button>
         {uploadedFile && (
           <span className="text-sm text-gray-600 truncate max-w-[200px]">
             {uploadedFile.name}
           </span>
         )}
       </div>
+
+      {apiStatus && (
+        <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 whitespace-pre-wrap">
+          <div className="flex items-center justify-between mb-1">
+            <strong>API Key Status:</strong>
+            <button
+              onClick={() => setApiStatus(null)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+          </div>
+          {apiStatus}
+        </div>
+      )}
 
       <textarea
         value={inputText}
@@ -115,10 +152,17 @@ export function PrepMode() {
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
           <div className="flex items-start justify-between">
-            <span>{error}</span>
+            <div>
+              <strong>Error:</strong> {error}
+              {errorDetails && (
+                <div className="mt-1 text-xs text-red-600 whitespace-pre-wrap">
+                  {errorDetails}
+                </div>
+              )}
+            </div>
             <button
               onClick={retryLast}
-              className="text-xs underline hover:no-underline ml-2"
+              className="text-xs underline hover:no-underline ml-2 shrink-0"
             >
               Retry
             </button>

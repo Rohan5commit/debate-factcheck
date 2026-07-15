@@ -5,6 +5,7 @@ export interface SerperSearchResult {
   url: string;
   snippet: string;
   position: number;
+  score: number;
 }
 
 interface SerperOrganicResult {
@@ -46,15 +47,17 @@ export async function searchWeb(
   });
 
   if (!response.ok) {
-    throw new Error(`Serper API error: ${response.statusText}`);
+    const body = await response.text();
+    throw new Error(`Serper API ${response.status}: ${body.substring(0, 200)}`);
   }
 
   const data: SerperResponse = await response.json();
 
-  return (data.organic || []).slice(0, maxResults).map((r) => ({
+  return (data.organic || []).slice(0, maxResults).map((r, i) => ({
     title: r.title,
     url: r.link,
     snippet: r.snippet || "",
-    position: r.position,
+    position: r.position || i + 1,
+    score: 1 - (r.position || i + 1) * 0.1,
   }));
 }

@@ -3,12 +3,7 @@ import { getCerebrasModel } from "@/lib/providers/cerebras";
 import { getNIMModel } from "@/lib/providers/nim";
 import { searchWeb } from "@/lib/providers/serper";
 import { segmentSentences, segmentLines } from "./segment";
-import {
-  rankSources,
-  filterReliableSources,
-  selectTopSources,
-} from "./sources";
-
+import { rankSources, filterReliableSources, selectTopSources } from "./sources";
 import { canMakeRequest } from "@/lib/rate-limiter";
 import { logger } from "@/lib/logger";
 import type { FactCheckResult, FactCheckStatus } from "@/types";
@@ -33,24 +28,56 @@ CLAIM: "${sentence}"
 SOURCES:
 ${sourceText}
 
-Respond with JSON:
-{
-  "status": "correct" | "misleading" | "incorrect" | "unverifiable",
-  "correction": "Brief correction if needed, empty if correct",
-  "sourceIndices": [indices of sources that support your verdict]
-}
+Respond with ONLY valid JSON (no markdown, no code fences):
+{"status":"correct","correction":"","sourceIndices":[]}
+
+Status must be one of: correct, misleading, incorrect, unverifiable
+- correct: sources confirm the claim is accurate
+- misleading: claim is technically true but missing important context
+- incorrect: sources contradict the claim
+- unverifiable: insufficient evidence to determine
 
 Rules:
 - Be brief and factual
 - Only use provided sources
-- If sources conflict or are insufficient, use "unverifiable"
-- Prefer official and authoritative sources`;
+- Return ONLY the JSON object, nothing else`;
 }
 
 function buildSearchQueryPrompt(sentence: string): string {
   return `Generate a concise search query to fact-check this claim. Return ONLY the search query text, nothing else.
 
 Claim: "${sentence}"`;
+}
+
+async function callModelWithRetry(
+  model: ReturnType<typeof getCerebrasModel> | ReturnType<typeof getNIMModel>,
+  prompt: string,
+  maxOutputTokens: number,
+  maxRetries: number = 2
+): Promise<string> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const { text } = await generateText({
+        model,
+        prompt,
+        temperature: 0.1,
+        maxOutputTokens,
+      });
+      return text;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      logger.warn(`Model call attempt ${attempt + 1} failed`, {
+        error: lastError.message,
+      });
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 async function verifySentence(
@@ -75,22 +102,51 @@ async function verifySentence(
     const queryPrompt = buildSearchQueryPrompt(sentence);
     const model = provider === "cerebras" ? getCerebrasModel() : getNIMModel();
 
-    const { text: searchQueryText } = await generateText({
-      model,
-      prompt: queryPrompt,
-      temperature: 0.1,
-      maxOutputTokens: 50,
-    });
+    let searchQueryText: string;
+    try {
+      searchQueryText = await callModelWithRetry(model, queryPrompt, 50);
+    } catch (e) {
+      logger.error("Model call failed for search query generation", {
+        sentence,
+        provider,
+        error: String(e),
+      });
+      return {
+        id,
+        text: sentence,
+        status: "unverifiable",
+        correction: `AI model error: ${e instanceof Error ? e.message : "Unknown error"}. Check API key.`,
+        sources: [],
+        timestamp: Date.now(),
+      };
+    }
 
     const searchQuery = searchQueryText.trim() || buildSearchQuery(sentence);
-    const rawSources = await searchWeb(searchQuery, 5);
+
+    let rawSources: Array<{ title: string; url: string; snippet: string; score?: number }>;
+    try {
+      rawSources = await searchWeb(searchQuery, 5);
+    } catch (e) {
+      logger.error("Serper search failed", {
+        query: searchQuery,
+        error: String(e),
+      });
+      return {
+        id,
+        text: sentence,
+        status: "unverifiable",
+        correction: `Search error: ${e instanceof Error ? e.message : "Unknown error"}. Check SERPER_API_KEY.`,
+        sources: [],
+        timestamp: Date.now(),
+      };
+    }
 
     if (rawSources.length === 0) {
       return {
         id,
         text: sentence,
         status: "unverifiable",
-        correction: "No reliable sources found to verify this claim.",
+        correction: "No sources found to verify this claim.",
         sources: [],
         timestamp: Date.now(),
       };
@@ -124,12 +180,24 @@ async function verifySentence(
     }
 
     const verifyPrompt = buildVerificationPrompt(sentence, topSources);
-    const { text: verifyResponse } = await generateText({
-      model,
-      prompt: verifyPrompt,
-      temperature: 0.1,
-      maxOutputTokens: 300,
-    });
+    let verifyResponse: string;
+    try {
+      verifyResponse = await callModelWithRetry(model, verifyPrompt, 300);
+    } catch (e) {
+      logger.error("Model call failed for verification", {
+        sentence,
+        provider,
+        error: String(e),
+      });
+      return {
+        id,
+        text: sentence,
+        status: "unverifiable",
+        correction: `AI model error during verification: ${e instanceof Error ? e.message : "Unknown"}. Check API key.`,
+        sources: topSources,
+        timestamp: Date.now(),
+      };
+    }
 
     let parsed: { status: string; correction: string; sourceIndices: number[] };
     try {
@@ -144,14 +212,14 @@ async function verifySentence(
       }
     } catch (e) {
       logger.error("Failed to parse verification response", {
-        response: verifyResponse,
+        response: verifyResponse.substring(0, 200),
         error: String(e),
       });
       return {
         id,
         text: sentence,
         status: "unverifiable",
-        correction: "Could not parse verification result.",
+        correction: "Could not parse AI response.",
         sources: topSources,
         timestamp: Date.now(),
       };
@@ -162,7 +230,7 @@ async function verifySentence(
       .map((i: number) => topSources[i]);
 
     const status = ["correct", "misleading", "incorrect", "unverifiable"].includes(parsed.status)
-      ? parsed.status as FactCheckStatus
+      ? (parsed.status as FactCheckStatus)
       : "unverifiable";
 
     return {
@@ -174,41 +242,34 @@ async function verifySentence(
       timestamp: Date.now(),
     };
   } catch (e) {
-    logger.error("Verification failed", {
+    logger.error("Unexpected verification error", {
       sentence,
       error: String(e),
+      stack: e instanceof Error ? e.stack : undefined,
     });
     return {
       id,
       text: sentence,
       status: "unverifiable",
-      correction: "Verification failed due to an error.",
+      correction: `Error: ${e instanceof Error ? e.message : "Unknown error"}`,
       sources: [],
       timestamp: Date.now(),
     };
   }
 }
 
-export async function checkLiveSentences(
-  text: string
-): Promise<FactCheckResult[]> {
+export async function checkLiveSentences(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results = await Promise.all(
-    sentences.map((s) => verifySentence(s, "cerebras"))
-  );
+  const results = await Promise.all(sentences.map((s) => verifySentence(s, "cerebras")));
   return results;
 }
 
-export async function checkPrepLines(
-  text: string
-): Promise<FactCheckResult[]> {
+export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
   const lines = segmentLines(text);
   const results: FactCheckResult[] = [];
-
   for (const line of lines) {
     const result = await verifySentence(line, "nim");
     results.push(result);
   }
-
   return results;
 }
