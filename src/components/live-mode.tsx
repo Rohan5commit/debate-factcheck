@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
+import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
 import { BrowserSupportWarning, getBrowserInfo } from "./browser-support-warning";
@@ -15,7 +15,7 @@ export function LiveMode() {
     startListening,
     stopListening,
     resetTranscript,
-  } = useSpeechRecognition();
+  } = useWhisperSpeech();
 
   const {
     results,
