@@ -99,29 +99,8 @@ async function verifySentence(
   }
 
   try {
-    const queryPrompt = buildSearchQueryPrompt(sentence);
     const model = provider === "cerebras" ? getCerebrasModel() : getNIMModel();
-
-    let searchQueryText: string;
-    try {
-      searchQueryText = await callModelWithRetry(model, queryPrompt, 50);
-    } catch (e) {
-      logger.error("Model call failed for search query generation", {
-        sentence,
-        provider,
-        error: String(e),
-      });
-      return {
-        id,
-        text: sentence,
-        status: "unverifiable",
-        correction: `AI model error: ${e instanceof Error ? e.message : "Unknown error"}. Check API key.`,
-        sources: [],
-        timestamp: Date.now(),
-      };
-    }
-
-    const searchQuery = searchQueryText.trim() || buildSearchQuery(sentence);
+    const searchQuery = buildSearchQuery(sentence);
 
     let rawSources: Array<{ title: string; url: string; snippet: string; score?: number }>;
     try {
