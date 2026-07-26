@@ -245,10 +245,6 @@ export async function checkLiveSentences(text: string): Promise<FactCheckResult[
 
 export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results: FactCheckResult[] = [];
-  for (const sentence of sentences) {
-    const result = await verifySentence(sentence, "nim");
-    results.push(result);
-  }
+  const results = await Promise.all(sentences.map((s) => verifySentence(s, "cerebras")));
   return results;
 }
