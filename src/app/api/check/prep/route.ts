@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkPrepLines } from "@/lib/pipeline/verify";
 import { logger } from "@/lib/logger";
 
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
