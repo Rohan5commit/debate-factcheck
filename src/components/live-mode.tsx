@@ -4,7 +4,6 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
-import { BrowserSupportWarning, getBrowserInfo } from "./browser-support-warning";
 
 export function LiveMode() {
   const {
@@ -75,18 +74,27 @@ export function LiveMode() {
     setIsTestingApi(false);
   };
 
-  const browser = getBrowserInfo();
-
   if (!isSupported) {
-    return <BrowserSupportWarning />;
+    return (
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <h3 className="text-sm font-medium text-red-800">
+          Microphone Not Available
+        </h3>
+        <p className="text-sm text-red-700 mt-1">
+          Live mode requires microphone access. Please use Prep mode to upload
+          text and PDFs instead.
+        </p>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-4">
-      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
-        <strong>Speech Recognition:</strong> Uses your browser&apos;s built-in speech-to-text.
-        Best with clear speech in quiet environments. Results may vary by browser.
-        Comet, Chrome, and Edge work best.
+      <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
+        <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
+        transcription in noisy environments. Works with multiple speakers,
+        background noise, and overlapping dialogue. Audio is processed every 3
+        seconds.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -98,7 +106,7 @@ export function LiveMode() {
               : "bg-blue-500 text-white hover:bg-blue-600"
           }`}
         >
-          {isListening ? "Stop Listening" : "Start Listening"}
+          {isListening ? "Stop Recording" : "Start Recording"}
         </button>
         <button
           onClick={handleClear}
@@ -114,14 +122,11 @@ export function LiveMode() {
           {isTestingApi ? "Testing..." : "Test API Keys"}
         </button>
         {isListening && (
-          <span className="flex items-center gap-2 text-sm text-gray-600">
-            <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-            Listening...
+          <span className="flex items-center gap-2 text-sm text-red-600 font-medium">
+            <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+            Recording...
           </span>
         )}
-        <span className="text-xs text-gray-400 ml-auto hidden sm:inline">
-          {browser.name}
-        </span>
       </div>
 
       {apiStatus && (
@@ -141,7 +146,7 @@ export function LiveMode() {
 
       {speechError && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-          <strong>Speech Error:</strong> {speechError}
+          <strong>Error:</strong> {speechError}
         </div>
       )}
 
@@ -169,7 +174,7 @@ export function LiveMode() {
       <div className="p-4 bg-gray-50 rounded-lg min-h-[100px]">
         <p className="text-sm text-gray-500 mb-2">Transcript:</p>
         <p className="text-gray-900">
-          {transcript || "Start speaking to begin fact-checking..."}
+          {transcript || "Click 'Start Recording' to begin fact-checking..."}
         </p>
       </div>
 
