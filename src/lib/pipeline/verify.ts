@@ -265,10 +265,10 @@ export async function checkLiveSentences(text: string): Promise<FactCheckResult[
 }
 
 export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
-  const lines = segmentLines(text);
+  const sentences = segmentSentences(text);
   const results: FactCheckResult[] = [];
-  for (const line of lines) {
-    const result = await verifySentence(line, "nim");
+  for (const sentence of sentences) {
+    const result = await verifySentence(sentence, "nim");
     results.push(result);
   }
   return results;
