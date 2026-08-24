@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { generateText } from "ai";
-import { getGroqModel } from "@/lib/providers/groq";
+import { callGroq } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
+import { generateText } from "ai";
 import { searchWeb } from "@/lib/providers/serper";
+import { logger } from "@/lib/logger";
 
 export const maxDuration = 60;
-import { logger } from "@/lib/logger";
 
 interface TestResult {
   provider: string;
@@ -17,12 +17,7 @@ interface TestResult {
 async function testGroq(): Promise<TestResult> {
   const start = Date.now();
   try {
-    const model = getGroqModel();
-    const { text } = await generateText({
-      model,
-      prompt: "Say 'hello' only",
-      maxOutputTokens: 10,
-    });
+    const text = await callGroq("Say 'hello' only", 10);
     return {
       provider: "Groq",
       status: "ok",
