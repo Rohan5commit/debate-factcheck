@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { generateText } from "ai";
-import { getCerebrasModel } from "@/lib/providers/cerebras";
+import { getGroqModel } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
 import { searchWeb } from "@/lib/providers/serper";
 import { logger } from "@/lib/logger";
@@ -12,24 +12,24 @@ interface TestResult {
   latencyMs?: number;
 }
 
-async function testCerebras(): Promise<TestResult> {
+async function testGroq(): Promise<TestResult> {
   const start = Date.now();
   try {
-    const model = getCerebrasModel();
+    const model = getGroqModel();
     const { text } = await generateText({
       model,
       prompt: "Say 'hello' only",
       maxOutputTokens: 10,
     });
     return {
-      provider: "Cerebras",
+      provider: "Groq",
       status: "ok",
       message: `Working: "${text.trim().substring(0, 50)}"`,
       latencyMs: Date.now() - start,
     };
   } catch (e) {
     return {
-      provider: "Cerebras",
+      provider: "Groq",
       status: "error",
       message: e instanceof Error ? e.message : "Unknown error",
       latencyMs: Date.now() - start,
@@ -85,17 +85,17 @@ async function testSerper(): Promise<TestResult> {
 export async function GET() {
   logger.info("Testing API keys");
 
-  const [cerebras, nim, serper] = await Promise.all([
-    testCerebras(),
+  const [groq, nim, serper] = await Promise.all([
+    testGroq(),
     testNIM(),
     testSerper(),
   ]);
 
   return NextResponse.json({
-    cerebras,
+    groq,
     nim,
     serper,
-    allOk: cerebras.status === "ok" && nim.status === "ok" && serper.status === "ok",
+    allOk: groq.status === "ok" && nim.status === "ok" && serper.status === "ok",
   });
 }
 

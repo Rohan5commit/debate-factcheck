@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { getCerebrasModel } from "@/lib/providers/cerebras";
+import { getGroqModel } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
 import { searchWeb } from "@/lib/providers/serper";
 import { segmentSentences, segmentLines } from "./segment";
@@ -50,7 +50,7 @@ Claim: "${sentence}"`;
 }
 
 async function callModelWithRetry(
-  model: ReturnType<typeof getCerebrasModel> | ReturnType<typeof getNIMModel>,
+  model: ReturnType<typeof getGroqModel> | ReturnType<typeof getNIMModel>,
   prompt: string,
   maxOutputTokens: number,
   maxRetries: number = 2
@@ -82,7 +82,7 @@ async function callModelWithRetry(
 
 async function verifySentence(
   sentence: string,
-  provider: "cerebras" | "nim"
+  provider: "groq" | "nim"
 ): Promise<FactCheckResult> {
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -99,7 +99,7 @@ async function verifySentence(
   }
 
   try {
-    const model = provider === "cerebras" ? getCerebrasModel() : getNIMModel();
+    const model = provider === "groq" ? getGroqModel() : getNIMModel();
     const searchQuery = buildSearchQuery(sentence);
 
     let rawSources: Array<{ title: string; url: string; snippet: string; score?: number }>;
@@ -239,12 +239,12 @@ async function verifySentence(
 
 export async function checkLiveSentences(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results = await Promise.all(sentences.map((s) => verifySentence(s, "cerebras")));
+  const results = await Promise.all(sentences.map((s) => verifySentence(s, "groq")));
   return results;
 }
 
 export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results = await Promise.all(sentences.map((s) => verifySentence(s, "cerebras")));
+  const results = await Promise.all(sentences.map((s) => verifySentence(s, "groq")));
   return results;
 }

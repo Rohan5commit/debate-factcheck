@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ai-sdk/cerebras": "^3.0.5",
+    "@ai-sdk/groq": "^4.0.30",
     "@ai-sdk/openai-compatible": "^3.0.5",
     "@base-ui/react": "^1.6.0",
     "ai": "^7.0.15",

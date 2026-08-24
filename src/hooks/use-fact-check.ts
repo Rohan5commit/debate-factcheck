@@ -138,7 +138,7 @@ export function useFactCheck(): UseFactCheckReturn {
     try {
       const response = await fetch("/api/test-keys");
       const data = await response.json();
-      return [data.cerebras, data.nim, data.serper].filter(Boolean);
+      return [data.groq, data.nim, data.serper].filter(Boolean);
     } catch {
       return [{ provider: "Unknown", status: "error", message: "Failed to reach server" }];
     }
