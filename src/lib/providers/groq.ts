@@ -3,7 +3,7 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 export async function callGroq(
   prompt: string,
   maxOutputTokens: number = 300,
-  model: string = "llama-3.1-8b-instant"
+  model: string = "openai/gpt-oss-20b"
 ): Promise<string> {
   const response = await fetch(GROQ_API_URL, {
     method: "POST",

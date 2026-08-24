@@ -1,5 +1,4 @@
-import { getNIMModel } from "@/lib/providers/nim";
-import { generateText } from "ai";
+import { callGroq } from "@/lib/providers/groq";
 import { searchWeb } from "@/lib/providers/serper";
 import { segmentSentences } from "./segment";
 import { rankSources, filterReliableSources, selectTopSources } from "./sources";
@@ -8,8 +7,7 @@ import { logger } from "@/lib/logger";
 import type { FactCheckResult, FactCheckStatus } from "@/types";
 
 function buildSearchQuery(sentence: string): string {
-  const words = sentence.split(/\s+/).slice(0, 10);
-  return words.join(" ");
+  return sentence.split(/\s+/).slice(0, 10).join(" ");
 }
 
 function buildVerificationPrompt(
@@ -47,21 +45,17 @@ async function callWithRetry(
   maxRetries: number = 2
 ): Promise<string> {
   let lastError: Error | null = null;
-
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
-      logger.warn(`Call attempt ${attempt + 1} failed`, {
-        error: lastError.message,
-      });
+      logger.warn(`Call attempt ${attempt + 1} failed`, { error: lastError.message });
       if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
       }
     }
   }
-
   throw lastError;
 }
 
@@ -69,43 +63,31 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (!canMakeRequest("serper")) {
-    logger.warn("Rate limit hit for Serper search");
     return {
-      id,
-      text: sentence,
-      status: "unverifiable",
+      id, text: sentence, status: "unverifiable",
       correction: "Rate limit reached for source search. Try again shortly.",
-      sources: [],
-      timestamp: Date.now(),
+      sources: [], timestamp: Date.now(),
     };
   }
 
   try {
     const searchQuery = buildSearchQuery(sentence);
-
     let rawSources: Array<{ title: string; url: string; snippet: string; score?: number }>;
     try {
       rawSources = await searchWeb(searchQuery, 5);
     } catch (e) {
-      logger.error("Serper search failed", { query: searchQuery, error: String(e) });
       return {
-        id,
-        text: sentence,
-        status: "unverifiable",
+        id, text: sentence, status: "unverifiable",
         correction: `Search error: ${e instanceof Error ? e.message : "Unknown"}. Check SERPER_API_KEY.`,
-        sources: [],
-        timestamp: Date.now(),
+        sources: [], timestamp: Date.now(),
       };
     }
 
     if (rawSources.length === 0) {
       return {
-        id,
-        text: sentence,
-        status: "unverifiable",
+        id, text: sentence, status: "unverifiable",
         correction: "No sources found to verify this claim.",
-        sources: [],
-        timestamp: Date.now(),
+        sources: [], timestamp: Date.now(),
       };
     }
 
@@ -115,44 +97,21 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
 
     if (topSources.length === 0) {
       return {
-        id,
-        text: sentence,
-        status: "unverifiable",
+        id, text: sentence, status: "unverifiable",
         correction: "Only low-credibility sources found.",
-        sources: [],
-        timestamp: Date.now(),
-      };
-    }
-
-    if (!canMakeRequest("nim")) {
-      logger.warn("Rate limit hit for NIM");
-      return {
-        id,
-        text: sentence,
-        status: "unverifiable",
-        correction: "Rate limit reached for verification. Try again shortly.",
-        sources: topSources,
-        timestamp: Date.now(),
+        sources: [], timestamp: Date.now(),
       };
     }
 
     const verifyPrompt = buildVerificationPrompt(sentence, topSources);
     let verifyResponse: string;
     try {
-      const model = getNIMModel();
-      verifyResponse = await callWithRetry(async () => {
-        const { text } = await generateText({ model, prompt: verifyPrompt, temperature: 0.1, maxOutputTokens: 300 });
-        return text;
-      });
+      verifyResponse = await callWithRetry(() => callGroq(verifyPrompt, 300));
     } catch (e) {
-      logger.error("Model call failed for verification", { sentence, error: String(e) });
       return {
-        id,
-        text: sentence,
-        status: "unverifiable",
+        id, text: sentence, status: "unverifiable",
         correction: `AI model error: ${e instanceof Error ? e.message : "Unknown"}. Check API key.`,
-        sources: topSources,
-        timestamp: Date.now(),
+        sources: topSources, timestamp: Date.now(),
       };
     }
 
@@ -163,14 +122,10 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
       const raw = JSON.parse(jsonMatch[0]);
       parsed = raw.results && Array.isArray(raw.results) && raw.results.length > 0 ? raw.results[0] : raw;
     } catch (e) {
-      logger.error("Failed to parse verification response", { response: verifyResponse.substring(0, 200), error: String(e) });
       return {
-        id,
-        text: sentence,
-        status: "unverifiable",
+        id, text: sentence, status: "unverifiable",
         correction: "Could not parse AI response.",
-        sources: topSources,
-        timestamp: Date.now(),
+        sources: topSources, timestamp: Date.now(),
       };
     }
 
@@ -183,22 +138,15 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
       : "unverifiable";
 
     return {
-      id,
-      text: sentence,
-      status,
+      id, text: sentence, status,
       correction: parsed.correction || "",
-      sources: resultSources,
-      timestamp: Date.now(),
+      sources: resultSources, timestamp: Date.now(),
     };
   } catch (e) {
-    logger.error("Unexpected verification error", { sentence, error: String(e), stack: e instanceof Error ? e.stack : undefined });
     return {
-      id,
-      text: sentence,
-      status: "unverifiable",
+      id, text: sentence, status: "unverifiable",
       correction: `Error: ${e instanceof Error ? e.message : "Unknown error"}`,
-      sources: [],
-      timestamp: Date.now(),
+      sources: [], timestamp: Date.now(),
     };
   }
 }
