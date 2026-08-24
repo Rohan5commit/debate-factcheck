@@ -4,7 +4,7 @@ const groq = createGroq({
   apiKey: process.env.GROQ_API_KEY ?? "",
 });
 
-export function getGroqModel(model: string = "llama-3.3-70b-versatile") {
+export function getGroqModel(model: string = "llama-3.1-8b-instant") {
   return groq.languageModel(model);
 }
 

@@ -3,6 +3,8 @@ import { generateText } from "ai";
 import { getGroqModel } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
 import { searchWeb } from "@/lib/providers/serper";
+
+export const maxDuration = 60;
 import { logger } from "@/lib/logger";
 
 interface TestResult {
