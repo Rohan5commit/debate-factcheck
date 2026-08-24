@@ -5,7 +5,7 @@ const groq = createGroq({
 });
 
 export function getGroqModel(model: string = "llama-3.3-70b-versatile") {
-  return groq.chat(model);
+  return groq.languageModel(model);
 }
 
 export { groq };
