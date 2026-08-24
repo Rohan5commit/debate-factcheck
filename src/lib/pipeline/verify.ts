@@ -1,4 +1,3 @@
-import { callGroq } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
 import { generateText } from "ai";
 import { searchWeb } from "@/lib/providers/serper";
@@ -66,10 +65,7 @@ async function callWithRetry(
   throw lastError;
 }
 
-async function verifySentence(
-  sentence: string,
-  provider: "groq" | "nim"
-): Promise<FactCheckResult> {
+async function verifySentence(sentence: string): Promise<FactCheckResult> {
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (!canMakeRequest("serper")) {
@@ -91,15 +87,12 @@ async function verifySentence(
     try {
       rawSources = await searchWeb(searchQuery, 5);
     } catch (e) {
-      logger.error("Serper search failed", {
-        query: searchQuery,
-        error: String(e),
-      });
+      logger.error("Serper search failed", { query: searchQuery, error: String(e) });
       return {
         id,
         text: sentence,
         status: "unverifiable",
-        correction: `Search error: ${e instanceof Error ? e.message : "Unknown error"}. Check SERPER_API_KEY.`,
+        correction: `Search error: ${e instanceof Error ? e.message : "Unknown"}. Check SERPER_API_KEY.`,
         sources: [],
         timestamp: Date.now(),
       };
@@ -131,8 +124,8 @@ async function verifySentence(
       };
     }
 
-    if (!canMakeRequest(provider)) {
-      logger.warn(`Rate limit hit for ${provider}`);
+    if (!canMakeRequest("nim")) {
+      logger.warn("Rate limit hit for NIM");
       return {
         id,
         text: sentence,
@@ -146,24 +139,18 @@ async function verifySentence(
     const verifyPrompt = buildVerificationPrompt(sentence, topSources);
     let verifyResponse: string;
     try {
-      if (provider === "groq") {
-        verifyResponse = await callWithRetry(() => callGroq(verifyPrompt, 300));
-      } else {
-        const model = getNIMModel();
+      const model = getNIMModel();
+      verifyResponse = await callWithRetry(async () => {
         const { text } = await generateText({ model, prompt: verifyPrompt, temperature: 0.1, maxOutputTokens: 300 });
-        verifyResponse = text;
-      }
-    } catch (e) {
-      logger.error("Model call failed for verification", {
-        sentence,
-        provider,
-        error: String(e),
+        return text;
       });
+    } catch (e) {
+      logger.error("Model call failed for verification", { sentence, error: String(e) });
       return {
         id,
         text: sentence,
         status: "unverifiable",
-        correction: `AI model error during verification: ${e instanceof Error ? e.message : "Unknown"}. Check API key.`,
+        correction: `AI model error: ${e instanceof Error ? e.message : "Unknown"}. Check API key.`,
         sources: topSources,
         timestamp: Date.now(),
       };
@@ -174,17 +161,9 @@ async function verifySentence(
       const jsonMatch = verifyResponse.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON found in response");
       const raw = JSON.parse(jsonMatch[0]);
-      
-      if (raw.results && Array.isArray(raw.results) && raw.results.length > 0) {
-        parsed = raw.results[0];
-      } else {
-        parsed = raw;
-      }
+      parsed = raw.results && Array.isArray(raw.results) && raw.results.length > 0 ? raw.results[0] : raw;
     } catch (e) {
-      logger.error("Failed to parse verification response", {
-        response: verifyResponse.substring(0, 200),
-        error: String(e),
-      });
+      logger.error("Failed to parse verification response", { response: verifyResponse.substring(0, 200), error: String(e) });
       return {
         id,
         text: sentence,
@@ -212,11 +191,7 @@ async function verifySentence(
       timestamp: Date.now(),
     };
   } catch (e) {
-    logger.error("Unexpected verification error", {
-      sentence,
-      error: String(e),
-      stack: e instanceof Error ? e.stack : undefined,
-    });
+    logger.error("Unexpected verification error", { sentence, error: String(e), stack: e instanceof Error ? e.stack : undefined });
     return {
       id,
       text: sentence,
@@ -230,12 +205,18 @@ async function verifySentence(
 
 export async function checkLiveSentences(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results = await Promise.all(sentences.map((s) => verifySentence(s, "groq")));
+  const results: FactCheckResult[] = [];
+  for (const s of sentences) {
+    results.push(await verifySentence(s));
+  }
   return results;
 }
 
 export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results = await Promise.all(sentences.map((s) => verifySentence(s, "groq")));
+  const results: FactCheckResult[] = [];
+  for (const s of sentences) {
+    results.push(await verifySentence(s));
+  }
   return results;
 }

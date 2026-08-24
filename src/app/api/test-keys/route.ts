@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { callGroq } from "@/lib/providers/groq";
 import { getNIMModel } from "@/lib/providers/nim";
 import { generateText } from "ai";
 import { searchWeb } from "@/lib/providers/serper";
@@ -12,26 +11,6 @@ interface TestResult {
   status: "ok" | "error";
   message: string;
   latencyMs?: number;
-}
-
-async function testGroq(): Promise<TestResult> {
-  const start = Date.now();
-  try {
-    const text = await callGroq("Say 'hello' only", 10);
-    return {
-      provider: "Groq",
-      status: "ok",
-      message: `Working: "${text.trim().substring(0, 50)}"`,
-      latencyMs: Date.now() - start,
-    };
-  } catch (e) {
-    return {
-      provider: "Groq",
-      status: "error",
-      message: e instanceof Error ? e.message : "Unknown error",
-      latencyMs: Date.now() - start,
-    };
-  }
 }
 
 async function testNIM(): Promise<TestResult> {
@@ -79,20 +58,42 @@ async function testSerper(): Promise<TestResult> {
   }
 }
 
+async function testGroqWhisper(): Promise<TestResult> {
+  const start = Date.now();
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/audio/models", {
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY ?? ""}` },
+    });
+    return {
+      provider: "Groq (Whisper)",
+      status: res.ok ? "ok" : "error",
+      message: res.ok ? "Working" : `Error ${res.status}`,
+      latencyMs: Date.now() - start,
+    };
+  } catch (e) {
+    return {
+      provider: "Groq (Whisper)",
+      status: "error",
+      message: e instanceof Error ? e.message : "Unknown error",
+      latencyMs: Date.now() - start,
+    };
+  }
+}
+
 export async function GET() {
   logger.info("Testing API keys");
 
-  const [groq, nim, serper] = await Promise.all([
-    testGroq(),
+  const [nim, serper, groqWhisper] = await Promise.all([
     testNIM(),
     testSerper(),
+    testGroqWhisper(),
   ]);
 
   return NextResponse.json({
-    groq,
+    groq: groqWhisper,
     nim,
     serper,
-    allOk: groq.status === "ok" && nim.status === "ok" && serper.status === "ok",
+    allOk: nim.status === "ok" && serper.status === "ok" && groqWhisper.status === "ok",
   });
 }
 
