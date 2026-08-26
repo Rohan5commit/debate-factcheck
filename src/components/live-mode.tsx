@@ -121,10 +121,9 @@ export function LiveMode() {
   return (
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
-        <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
-        transcription in noisy environments. Works with multiple speakers,
-        background noise, and overlapping dialogue. Audio is processed every 5
-        seconds with overlap for better accuracy.
+        <strong>Debate Mode Active:</strong> Uses real-time speech recognition
+        for live transcription. Speak naturally — sentences are transcribed
+        instantly and fact-checked automatically.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
