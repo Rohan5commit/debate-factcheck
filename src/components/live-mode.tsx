@@ -5,6 +5,8 @@ import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
 
+const BATCH_SIZE = 3;
+
 export function LiveMode() {
   const {
     isListening,
@@ -21,6 +23,7 @@ export function LiveMode() {
     isChecking,
     error: checkError,
     errorDetails,
+    pendingCount,
     checkLive,
     retryLast,
     testApiKeys,
@@ -28,8 +31,32 @@ export function LiveMode() {
 
   const checkedSentencesRef = useRef<Set<string>>(new Set());
   const lastCheckedRef = useRef("");
+  const processingQueueRef = useRef<string[]>([]);
+  const isProcessingRef = useRef(false);
   const [apiStatus, setApiStatus] = useState<string | null>(null);
   const [isTestingApi, setIsTestingApi] = useState(false);
+
+  const processQueue = useCallback(async () => {
+    if (isProcessingRef.current || processingQueueRef.current.length === 0) return;
+    isProcessingRef.current = true;
+
+    while (processingQueueRef.current.length > 0) {
+      const batch = processingQueueRef.current.splice(0, BATCH_SIZE);
+      if (batch.length === 0) break;
+
+      const textToCheck = batch.join(" ");
+      await new Promise<void>((resolve) => {
+        checkLive(textToCheck);
+        setTimeout(resolve, 100);
+      });
+
+      batch.forEach((s) => checkedSentencesRef.current.add(s));
+
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    isProcessingRef.current = false;
+  }, [checkLive]);
 
   const processTranscript = useCallback(() => {
     if (!transcript || transcript === lastCheckedRef.current) return;
@@ -38,15 +65,16 @@ export function LiveMode() {
       .split(/(?<=[.!?])\s+/)
       .filter((s) => s.trim().length > 5);
 
-    const unchecked = sentences.filter((s) => !checkedSentencesRef.current.has(s));
+    const unchecked = sentences.filter(
+      (s) => !checkedSentencesRef.current.has(s)
+    );
 
     if (unchecked.length > 0) {
-      const textToCheck = unchecked.join(" ");
       lastCheckedRef.current = transcript;
-      checkLive(textToCheck);
-      unchecked.forEach((s) => checkedSentencesRef.current.add(s));
+      processingQueueRef.current.push(...unchecked);
+      processQueue();
     }
-  }, [transcript, checkLive]);
+  }, [transcript, processQueue]);
 
   useEffect(() => {
     processTranscript();
@@ -56,14 +84,16 @@ export function LiveMode() {
     resetTranscript();
     checkedSentencesRef.current = new Set();
     lastCheckedRef.current = "";
+    processingQueueRef.current = [];
+    isProcessingRef.current = false;
   };
 
   const handleTestApi = async () => {
     setIsTestingApi(true);
     setApiStatus(null);
     try {
-      const results = await testApiKeys();
-      const lines = results.map(
+      const testResults = await testApiKeys();
+      const lines = testResults.map(
         (r: { provider: string; status: string; message: string }) =>
           `${r.provider}: ${r.status === "ok" ? "✓" : "✗"} ${r.message}`
       );
@@ -93,8 +123,8 @@ export function LiveMode() {
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
         <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
         transcription in noisy environments. Works with multiple speakers,
-        background noise, and overlapping dialogue. Audio is processed every 3
-        seconds.
+        background noise, and overlapping dialogue. Audio is processed every 5
+        seconds with overlap for better accuracy.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -178,10 +208,12 @@ export function LiveMode() {
         </p>
       </div>
 
-      {isChecking && (
+      {(isChecking || pendingCount > 0) && (
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          Checking facts...
+          {isChecking
+            ? `Checking facts...${pendingCount > 0 ? ` (${pendingCount} pending)` : ""}`
+            : `${pendingCount} sentence${pendingCount !== 1 ? "s" : ""} pending verification`}
         </div>
       )}
 

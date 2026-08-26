@@ -10,12 +10,19 @@ interface ApiTestResult {
   latencyMs?: number;
 }
 
+interface QueuedRequest {
+  text: string;
+  mode: "live" | "prep";
+  resolve: () => void;
+}
+
 interface UseFactCheckReturn {
   results: FactCheckResult[];
   isChecking: boolean;
   error: string | null;
   errorDetails: string | null;
-  checkLive: (text: string) => Promise<void>;
+  pendingCount: number;
+  checkLive: (text: string) => void;
   checkPrep: (text: string) => Promise<void>;
   retryLast: () => Promise<void>;
   clearResults: () => void;
@@ -27,101 +34,128 @@ export function useFactCheck(): UseFactCheckReturn {
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const queueRef = useRef<QueuedRequest[]>([]);
+  const processingRef = useRef(false);
   const lastRequestRef = useRef<{ text: string; mode: "live" | "prep" } | null>(null);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const checkLive = useCallback(async (text: string) => {
-    if (!text.trim()) return;
+  const processQueue = useCallback(async () => {
+    if (processingRef.current || queueRef.current.length === 0) return;
+    processingRef.current = true;
 
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
+    while (queueRef.current.length > 0) {
+      const req = queueRef.current.shift()!;
+      setPendingCount(queueRef.current.length);
+      setIsChecking(true);
+      setError(null);
+      setErrorDetails(null);
+      lastRequestRef.current = { text: req.text, mode: req.mode };
 
-    return new Promise<void>((resolve) => {
-      debounceTimerRef.current = setTimeout(async () => {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-        abortControllerRef.current = new AbortController();
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 50000);
 
-        lastRequestRef.current = { text, mode: "live" };
-        setIsChecking(true);
-        setError(null);
-        setErrorDetails(null);
-
-        try {
-          const response = await fetch("/api/check/live", {
+        const response = await fetch(
+          req.mode === "live" ? "/api/check/live" : "/api/check/prep",
+          {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
-            signal: abortControllerRef.current.signal,
-          });
-
-          const data = await response.json();
-
-          if (!response.ok) {
-            const errorMsg = data.error || `Check failed: ${response.statusText}`;
-            const details = data.details || null;
-            setError(errorMsg);
-            setErrorDetails(details);
-          } else if (data.results) {
-            setResults((prev) => [...data.results, ...prev]);
+            body: JSON.stringify({ text: req.text }),
+            signal: controller.signal,
           }
-        } catch (e) {
-          if (e instanceof Error && e.name !== "AbortError") {
-            setError(e.message);
-            setErrorDetails(null);
-          }
-        } finally {
-          setIsChecking(false);
-          resolve();
+        );
+
+        clearTimeout(timeoutId);
+        const data = await response.json();
+
+        if (!response.ok) {
+          const errorMsg = data.error || `Check failed: ${response.statusText}`;
+          const details = data.details || null;
+          setError(errorMsg);
+          setErrorDetails(details);
+        } else if (data.results) {
+          setResults((prev) => [...prev, ...data.results]);
         }
-      }, 300);
-    });
-  }, []);
-
-  const checkPrep = useCallback(async (text: string) => {
-    if (!text.trim()) return;
-
-    lastRequestRef.current = { text, mode: "prep" };
-    setIsChecking(true);
-    setError(null);
-    setErrorDetails(null);
-    setResults([]);
-
-    try {
-      const response = await fetch("/api/check/prep", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errorMsg = data.error || `Check failed: ${response.statusText}`;
-        const details = data.details || null;
-        setError(errorMsg);
-        setErrorDetails(details);
-      } else if (data.results) {
-        setResults(data.results);
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") {
+          setError("Fact-check timed out. Try checking fewer sentences at once.");
+          setErrorDetails(null);
+        } else if (e instanceof Error) {
+          setError(e.message);
+          setErrorDetails(null);
+        }
+      } finally {
+        req.resolve();
       }
-    } catch (e) {
-      if (e instanceof Error) {
-        setError(e.message);
-        setErrorDetails(null);
-      }
-    } finally {
-      setIsChecking(false);
     }
+
+    setIsChecking(false);
+    setPendingCount(0);
+    processingRef.current = false;
   }, []);
+
+  const checkLive = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      return new Promise<void>((resolve) => {
+        queueRef.current.push({ text, mode: "live", resolve });
+        setPendingCount(queueRef.current.length);
+        processQueue();
+      });
+    },
+    [processQueue]
+  );
+
+  const checkPrep = useCallback(
+    async (text: string) => {
+      if (!text.trim()) return;
+      lastRequestRef.current = { text, mode: "prep" };
+      setIsChecking(true);
+      setError(null);
+      setErrorDetails(null);
+      setResults([]);
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 50000);
+
+        const response = await fetch("/api/check/prep", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+        const data = await response.json();
+
+        if (!response.ok) {
+          const errorMsg = data.error || `Check failed: ${response.statusText}`;
+          const details = data.details || null;
+          setError(errorMsg);
+          setErrorDetails(details);
+        } else if (data.results) {
+          setResults(data.results);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") {
+          setError("Fact-check timed out.");
+        } else if (e instanceof Error) {
+          setError(e.message);
+          setErrorDetails(null);
+        }
+      } finally {
+        setIsChecking(false);
+      }
+    },
+    []
+  );
 
   const retryLast = useCallback(async () => {
     if (!lastRequestRef.current) return;
     const { text, mode } = lastRequestRef.current;
     if (mode === "live") {
-      await checkLive(text);
+      checkLive(text);
     } else {
       await checkPrep(text);
     }
@@ -131,6 +165,8 @@ export function useFactCheck(): UseFactCheckReturn {
     setResults([]);
     setError(null);
     setErrorDetails(null);
+    setPendingCount(0);
+    queueRef.current = [];
     lastRequestRef.current = null;
   }, []);
 
@@ -149,6 +185,7 @@ export function useFactCheck(): UseFactCheckReturn {
     isChecking,
     error,
     errorDetails,
+    pendingCount,
     checkLive,
     checkPrep,
     retryLast,

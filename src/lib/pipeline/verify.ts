@@ -151,20 +151,51 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
   }
 }
 
-export async function checkLiveSentences(text: string): Promise<FactCheckResult[]> {
-  const sentences = segmentSentences(text);
+async function verifySentenceWithRetry(sentence: string): Promise<FactCheckResult> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await verifySentence(sentence);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      logger.warn(`Verify attempt ${attempt + 1} failed for: ${sentence.slice(0, 50)}`, {
+        error: lastError.message,
+      });
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  return {
+    id: `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text: sentence,
+    status: "unverifiable",
+    correction: `Error: ${lastError?.message || "Unknown error"}`,
+    sources: [],
+    timestamp: Date.now(),
+  };
+}
+
+const PARALLEL_LIMIT = 3;
+
+async function verifyBatch(sentences: string[]): Promise<FactCheckResult[]> {
   const results: FactCheckResult[] = [];
-  for (const s of sentences) {
-    results.push(await verifySentence(s));
+  for (let i = 0; i < sentences.length; i += PARALLEL_LIMIT) {
+    const batch = sentences.slice(i, i + PARALLEL_LIMIT);
+    const batchResults = await Promise.all(batch.map(verifySentenceWithRetry));
+    results.push(...batchResults);
   }
   return results;
 }
 
+export async function checkLiveSentences(text: string): Promise<FactCheckResult[]> {
+  const sentences = segmentSentences(text);
+  if (sentences.length === 0) return [];
+  return verifyBatch(sentences);
+}
+
 export async function checkPrepLines(text: string): Promise<FactCheckResult[]> {
   const sentences = segmentSentences(text);
-  const results: FactCheckResult[] = [];
-  for (const s of sentences) {
-    results.push(await verifySentence(s));
-  }
-  return results;
+  if (sentences.length === 0) return [];
+  return verifyBatch(sentences);
 }
