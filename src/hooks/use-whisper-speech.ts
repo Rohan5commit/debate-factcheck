@@ -12,8 +12,10 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-function checkSupport(): boolean {
-  return typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+function getSpeechRecognition(): any {
+  if (typeof window === "undefined") return null;
+  const w = window as any;
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
 export function useWhisperSpeech(): WhisperSpeechHook {
@@ -21,148 +23,93 @@ export function useWhisperSpeech(): WhisperSpeechHook {
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const processingRef = useRef(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const overlapBufferRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<any>(null);
+  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isSupported = checkSupport();
+  const isSupported = typeof window !== "undefined" && !!getSpeechRecognition();
 
-  const processAudio = useCallback(async () => {
-    if (processingRef.current || audioChunksRef.current.length === 0) return;
-    processingRef.current = true;
-
-    const chunks = [...audioChunksRef.current];
-    audioChunksRef.current = [];
-
-    try {
-      const audioBlob = new Blob(chunks, { type: "audio/webm" });
-      if (audioBlob.size < 1500) {
-        processingRef.current = false;
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "audio.webm");
-
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Transcription failed");
-      }
-
-      const result = await response.json();
-      const text = result.text?.trim();
-
-      if (text && text.length > 0) {
-        setTranscript((prev) => {
-          const trimmed = prev.trim();
-          return trimmed ? `${trimmed} ${text}` : text;
-        });
-      }
-
-      const overlapChunks = chunks.slice(-6);
-      overlapBufferRef.current = overlapChunks;
-    } catch (e) {
-      console.error("Transcription error:", e);
-      if (chunks.length > 0) {
-        overlapBufferRef.current = chunks.slice(-6);
-      }
-    } finally {
-      processingRef.current = false;
+  const startListening = useCallback(() => {
+    const SpeechRecognition = getSpeechRecognition();
+    if (!SpeechRecognition) {
+      setError("Speech recognition is not supported in this browser. Use Chrome or Edge.");
+      return;
     }
-  }, []);
 
-  const startListening = useCallback(async () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = "";
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          const text = result[0].transcript.trim();
+          if (text.length > 0) {
+            finalTranscript += (finalTranscript ? " " : "") + text;
+            setTranscript(finalTranscript);
+          }
+        }
+      }
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      const errType = event.error;
+      if (errType === "no-speech") return;
+      if (errType === "aborted") return;
+      console.error("Speech recognition error:", errType, event.message);
+      setError(`Speech recognition error: ${errType}`);
+    };
+
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) {
+        restartTimeoutRef.current = setTimeout(() => {
+          if (recognitionRef.current === recognition) {
+            try {
+              recognition.start();
+            } catch {
+              setIsListening(false);
+            }
+          }
+        }, 200);
+      }
+    };
+
+    recognitionRef.current = recognition;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 16000,
-        },
-      });
-
-      streamRef.current = stream;
-      audioChunksRef.current = [];
-      overlapBufferRef.current = [];
-
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start(1000);
-
-      intervalRef.current = setInterval(() => {
-        if (
-          mediaRecorder.state === "recording" &&
-          audioChunksRef.current.length > 0 &&
-          !processingRef.current
-        ) {
-          processAudio();
-        }
-      }, 5000);
-
-      setTimeout(() => {
-        if (
-          mediaRecorder.state === "recording" &&
-          audioChunksRef.current.length > 0 &&
-          !processingRef.current
-        ) {
-          processAudio();
-        }
-      }, 2500);
-
+      recognition.start();
       setIsListening(true);
       setError(null);
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? `Microphone error: ${e.message}`
-          : "Could not access microphone"
-      );
+      setError(e instanceof Error ? e.message : "Failed to start speech recognition");
     }
-  }, [processAudio]);
+  }, []);
 
   const stopListening = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
     }
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
+
+    if (recognitionRef.current) {
+      const rec = recognitionRef.current;
+      recognitionRef.current = null;
+      try { rec.stop(); } catch {}
     }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    setTimeout(() => {
-      if (audioChunksRef.current.length > 0 && !processingRef.current) {
-        processAudio();
-      }
-    }, 200);
+
     setIsListening(false);
-  }, [processAudio]);
+  }, []);
 
   const resetTranscript = useCallback(() => {
     setTranscript("");
-    audioChunksRef.current = [];
-    overlapBufferRef.current = [];
   }, []);
 
   return {
