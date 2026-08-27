@@ -13,6 +13,7 @@ export function LiveMode() {
     transcript,
     isSupported,
     error: speechError,
+    status: speechStatus,
     startListening,
     stopListening,
     resetTranscript,
@@ -121,9 +122,9 @@ export function LiveMode() {
   return (
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
-        <strong>Debate Mode Active:</strong> Uses real-time speech recognition
-        for live transcription. Speak naturally — sentences are transcribed
-        instantly and fact-checked automatically.
+        <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
+        transcription. Audio is captured in 8-second chunks with overlap for
+        context. Sentences are fact-checked automatically.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -176,6 +177,13 @@ export function LiveMode() {
       {speechError && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
           <strong>Error:</strong> {speechError}
+        </div>
+      )}
+
+      {speechStatus && (
+        <div className="p-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 flex items-center gap-2">
+          <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          {speechStatus}
         </div>
       )}
 
