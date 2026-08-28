@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     logger.info("Transcription request via Groq", { size: audioFile.size, type: audioFile.type });
 
     const whisperFormData = new FormData();
-    whisperFormData.append("file", audioFile, "audio.webm");
+    whisperFormData.append("file", audioFile, audioFile.name || "audio.wav");
     whisperFormData.append("model", "whisper-large-v3");
     whisperFormData.append("language", "en");
     whisperFormData.append("response_format", "verbose_json");
