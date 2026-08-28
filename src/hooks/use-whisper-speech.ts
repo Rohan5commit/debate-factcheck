@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { pushLog } from "@/lib/debug-log";
 
 interface WhisperSpeechHook {
   isListening: boolean;
@@ -13,9 +14,11 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-const CHUNK_SECONDS = 8;
+const CHUNK_SECONDS = 5;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 2;
+const SILENCE_RMS_THRESHOLD = 0.008;
+const OVERLAP_SECONDS = 0.5;
 
 function checkSupport(): boolean {
   return (
@@ -59,29 +62,40 @@ function encodeWAV(samples: Int16Array, sampleRate: number): Blob {
   view.setUint32(40, samples.length * 2, true);
 
   const pcm = new Uint8Array(buffer, 44);
-  const int16Bytes = new Uint8Array(samples.buffer);
+  const int16Bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
   pcm.set(int16Bytes);
 
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-function resample(
-  buffer: AudioBuffer,
+function computeRMS(samples: Float32Array[]): number {
+  let sum = 0;
+  let count = 0;
+  for (const chunk of samples) {
+    for (let i = 0; i < chunk.length; i++) {
+      sum += chunk[i] * chunk[i];
+      count++;
+    }
+  }
+  return count === 0 ? 0 : Math.sqrt(sum / count);
+}
+
+function resampleFloat32(
+  input: Float32Array,
+  inputRate: number,
   targetRate: number
 ): Float32Array {
-  const ratio = buffer.sampleRate / targetRate;
-  const newLength = Math.round(buffer.length / ratio);
+  if (inputRate === targetRate) return input;
+  const ratio = inputRate / targetRate;
+  const newLength = Math.round(input.length / ratio);
   const result = new Float32Array(newLength);
-  const channelData = buffer.getChannelData(0);
-
   for (let i = 0; i < newLength; i++) {
     const srcIndex = i * ratio;
-    const srcIndexFloor = Math.floor(srcIndex);
-    const srcIndexCeil = Math.min(srcIndexFloor + 1, channelData.length - 1);
-    const frac = srcIndex - srcIndexFloor;
-    result[i] = channelData[srcIndexFloor] * (1 - frac) + channelData[srcIndexCeil] * frac;
+    const floor = Math.floor(srcIndex);
+    const ceil = Math.min(floor + 1, input.length - 1);
+    const frac = srcIndex - floor;
+    result[i] = input[floor] * (1 - frac) + input[ceil] * frac;
   }
-
   return result;
 }
 
@@ -99,6 +113,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const sampleBufferRef = useRef<Float32Array[]>([]);
   const queueRef = useRef<Float32Array[][]>([]);
+  const overlapRef = useRef<Float32Array | null>(null);
   const isListeningRef = useRef(false);
   const processingRef = useRef(false);
 
@@ -113,11 +128,31 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       offset += chunk.length;
     }
 
-    const wavBlob = encodeWAV(floatTo16BitPCM(merged), TARGET_SAMPLE_RATE);
-
-    if (wavBlob.size < 1000) {
+    const rms = computeRMS(samples);
+    if (rms < SILENCE_RMS_THRESHOLD) {
+      pushLog("info", "capture", "silence skip", { rms: rms.toFixed(4), samples: totalLength });
       return null;
     }
+
+    const actualRate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
+    const resampled = resampleFloat32(merged, actualRate, TARGET_SAMPLE_RATE);
+    pushLog("info", "encode", "encoding WAV", {
+      actualRate,
+      targetRate: TARGET_SAMPLE_RATE,
+      inputSamples: merged.length,
+      resampledSamples: resampled.length,
+      rms: rms.toFixed(4),
+    });
+
+    const wavBlob = encodeWAV(floatTo16BitPCM(resampled), TARGET_SAMPLE_RATE);
+
+    if (wavBlob.size < 1000) {
+      pushLog("warn", "encode", "wav too small, skipping", { size: wavBlob.size });
+      return null;
+    }
+
+    pushLog("info", "transcribe", "sending to Groq", { wavBytes: wavBlob.size, durationSec: (resampled.length / TARGET_SAMPLE_RATE).toFixed(1) });
+    const t0 = Date.now();
 
     const formData = new FormData();
     formData.append("audio", wavBlob, "audio.wav");
@@ -127,13 +162,18 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       body: formData,
     });
 
+    const latency = Date.now() - t0;
+
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
+      pushLog("error", "transcribe", "Groq error", { status: response.status, latencyMs: latency, error: data.error });
       throw new Error(data.error || `Transcription failed: ${response.status}`);
     }
 
     const result = await response.json();
-    return result.text?.trim() || null;
+    const text = result.text?.trim() || null;
+    pushLog("info", "transcribe", text ? "transcribed" : "empty result", { latencyMs: latency, textLen: text?.length || 0, textPreview: text?.slice(0, 80) || "" });
+    return text;
   };
 
   const processQueue = useCallback(async () => {
@@ -153,6 +193,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
           succeeded = true;
           break;
         } catch (e) {
+          pushLog("error", "transcribe", `attempt ${attempt + 1} failed`, { error: String(e) });
           console.error(`Transcription attempt ${attempt + 1} failed:`, e);
           if (attempt < MAX_RETRIES) {
             setStatus(`Retrying... (${attempt + 1}/${MAX_RETRIES})`);
@@ -166,9 +207,25 @@ export function useWhisperSpeech(): WhisperSpeechHook {
           const trimmed = prev.trim();
           return trimmed ? `${trimmed} ${text}` : text;
         });
+        pushLog("info", "capture", "transcript appended", { textLen: text.length });
+      } else if (!succeeded) {
+        pushLog("error", "transcribe", "chunk failed after retries, skipping", {});
+        setStatus("Transcription failed — skipping chunk");
+        await new Promise((r) => setTimeout(r, 500));
       }
 
       setStatus(null);
+
+      if (succeeded && text) {
+        const actualRate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
+        const totalLen = samples.reduce((s, c) => s + c.length, 0);
+        const overlapSamples = Math.round(OVERLAP_SECONDS * actualRate);
+        const merged = new Float32Array(totalLen);
+        let off = 0;
+        for (const c of samples) { merged.set(c, off); off += c.length; }
+        const start = Math.max(0, merged.length - overlapSamples);
+        overlapRef.current = merged.slice(start);
+      }
     }
 
     processingRef.current = false;
@@ -176,9 +233,18 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const flushBuffer = useCallback(() => {
     if (sampleBufferRef.current.length === 0) return;
-    const samples = [...sampleBufferRef.current];
+    let samples = [...sampleBufferRef.current];
     sampleBufferRef.current = [];
+
+    if (overlapRef.current && overlapRef.current.length > 0) {
+      samples = [overlapRef.current, ...samples];
+      pushLog("info", "capture", "flushing with overlap", { overlapSamples: overlapRef.current.length, chunks: samples.length });
+    } else {
+      pushLog("info", "capture", "flushing chunk", { chunks: samples.length, totalSamples: samples.reduce((s,c)=>s+c.length,0) });
+    }
+
     queueRef.current.push(samples);
+    pushLog("info", "capture", "queued for transcription", { queueLen: queueRef.current.length });
     processQueue();
   }, [processQueue]);
 
@@ -193,12 +259,22 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       });
 
       const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      const audioContext = new AudioCtx({ sampleRate: TARGET_SAMPLE_RATE });
+      const audioContext = new AudioCtx();
+      pushLog("info", "system", "AudioContext created", { sampleRate: audioContext.sampleRate, state: audioContext.state });
+
+      audioContext.onstatechange = () => {
+        pushLog("info", "system", `AudioContext state: ${audioContext.state}`, {});
+        if (audioContext.state === "suspended") {
+          audioContext.resume().then(() => pushLog("info", "system", "AudioContext resumed", {}));
+        }
+      };
+
       const source = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
       sampleBufferRef.current = [];
       queueRef.current = [];
+      overlapRef.current = null;
       processingRef.current = false;
 
       processor.onaudioprocess = (event: AudioProcessingEvent) => {
@@ -215,33 +291,40 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       sourceRef.current = source;
       streamRef.current = stream;
 
-      const totalSamplesPerChunk = TARGET_SAMPLE_RATE * CHUNK_SECONDS;
-      const checkInterval = 1000;
+      const totalSamplesPerChunk = audioContext.sampleRate * CHUNK_SECONDS;
 
       intervalRef.current = setInterval(() => {
-        const totalSamples = sampleBufferRef.current.reduce(
-          (sum, s) => sum + s.length,
-          0
-        );
+        if (audioContext.state === "suspended") {
+          audioContext.resume();
+          pushLog("warn", "system", "resumed suspended AudioContext in interval", {});
+        }
+        const totalSamples = sampleBufferRef.current.reduce((sum, s) => sum + s.length, 0);
         if (totalSamples >= totalSamplesPerChunk) {
           flushBuffer();
         }
-      }, checkInterval);
+      }, 1000);
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && audioContext.state === "suspended") {
+          audioContext.resume();
+          pushLog("info", "system", "visibilitychange resume", {});
+        }
+      });
 
       isListeningRef.current = true;
       setIsListening(true);
       setError(null);
       setStatus(null);
+      pushLog("info", "system", "listening started", { chunkSeconds: CHUNK_SECONDS });
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? `Microphone error: ${e.message}`
-          : "Could not access microphone"
-      );
+      const msg = e instanceof Error ? `Microphone error: ${e.message}` : "Could not access microphone";
+      pushLog("error", "system", msg, {});
+      setError(msg);
     }
   }, [flushBuffer]);
 
   const stopListening = useCallback(() => {
+    pushLog("info", "system", "stopping", { bufferedSamples: sampleBufferRef.current.reduce((s,c)=>s+c.length,0) });
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -271,9 +354,11 @@ export function useWhisperSpeech(): WhisperSpeechHook {
   }, [flushBuffer]);
 
   const resetTranscript = useCallback(() => {
+    pushLog("info", "system", "transcript reset", {});
     setTranscript("");
     sampleBufferRef.current = [];
     queueRef.current = [];
+    overlapRef.current = null;
   }, []);
 
   return {

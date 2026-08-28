@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import type { FactCheckResult } from "@/types";
+import { pushLog } from "@/lib/debug-log";
 
 interface ApiTestResult {
   provider: string;
@@ -51,6 +52,8 @@ export function useFactCheck(): UseFactCheckReturn {
       setErrorDetails(null);
       lastRequestRef.current = { text: req.text, mode: req.mode };
 
+      pushLog("info", "fact-check", "sending batch", { textLen: req.text.length, textPreview: req.text.slice(0, 60) });
+      const t0 = Date.now();
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 50000);
@@ -67,20 +70,26 @@ export function useFactCheck(): UseFactCheckReturn {
 
         clearTimeout(timeoutId);
         const data = await response.json();
+        const latency = Date.now() - t0;
 
         if (!response.ok) {
           const errorMsg = data.error || `Check failed: ${response.statusText}`;
           const details = data.details || null;
+          pushLog("error", "fact-check", "batch failed", { status: response.status, latencyMs: latency, error: errorMsg });
           setError(errorMsg);
           setErrorDetails(details);
         } else if (data.results) {
+          pushLog("info", "fact-check", "batch done", { results: data.results.length, latencyMs: latency });
           setResults((prev) => [...prev, ...data.results]);
         }
       } catch (e) {
+        const latency = Date.now() - t0;
         if (e instanceof Error && e.name === "AbortError") {
+          pushLog("error", "fact-check", "timeout", { latencyMs: latency });
           setError("Fact-check timed out. Try checking fewer sentences at once.");
           setErrorDetails(null);
         } else if (e instanceof Error) {
+          pushLog("error", "fact-check", "fetch error", { latencyMs: latency, error: e.message });
           setError(e.message);
           setErrorDetails(null);
         }

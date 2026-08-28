@@ -16,6 +16,7 @@ export async function callGroq(
       messages: [{ role: "user", content: prompt }],
       max_tokens: maxOutputTokens,
       temperature: 0.1,
+      response_format: { type: "json_object" },
     }),
   });
 

@@ -6,6 +6,16 @@ import { canMakeRequest } from "@/lib/rate-limiter";
 import { logger } from "@/lib/logger";
 import type { FactCheckResult, FactCheckStatus } from "@/types";
 
+const FILLER_REGEX = /^(hi|hello|hey|thank you|thanks|um|uh|oh|yeah|okay|yes|no|please)(\s|[.!?]|$)/i;
+
+function isFactual(sentence: string): boolean {
+  const trimmed = sentence.trim();
+  if (trimmed.length < 15) return false;
+  if (trimmed.split(/\s+/).length < 5) return false;
+  if (FILLER_REGEX.test(trimmed)) return false;
+  return true;
+}
+
 function buildSearchQuery(sentence: string): string {
   return sentence.split(/\s+/).slice(0, 10).join(" ");
 }
@@ -25,8 +35,8 @@ CLAIM: "${sentence}"
 SOURCES:
 ${sourceText}
 
-Respond with ONLY valid JSON (no markdown, no code fences):
-{"status":"correct","correction":"","sourceIndices":[]}
+Respond with JSON only. No markdown, no explanation outside JSON.
+Required format: {"status":"correct","correction":"","sourceIndices":[]}
 
 Status must be one of: correct, misleading, incorrect, unverifiable
 - correct: sources confirm the claim is accurate
@@ -37,7 +47,7 @@ Status must be one of: correct, misleading, incorrect, unverifiable
 Rules:
 - Be brief and factual
 - Only use provided sources
-- Return ONLY the JSON object, nothing else`;
+- Return ONLY the JSON object`;
 }
 
 async function callWithRetry(
@@ -61,6 +71,14 @@ async function callWithRetry(
 
 async function verifySentence(sentence: string): Promise<FactCheckResult> {
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  if (!isFactual(sentence)) {
+    return {
+      id, text: sentence, status: "unverifiable",
+      correction: "Not a factual claim — skipped.",
+      sources: [], timestamp: Date.now(),
+    };
+  }
 
   if (!canMakeRequest("serper")) {
     return {
@@ -117,11 +135,14 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
 
     let parsed: { status: string; correction: string; sourceIndices: number[] };
     try {
-      const jsonMatch = verifyResponse.match(/\{[\s\S]*\}/);
+      const cleaned = verifyResponse.replace(/```json|```/g, "").trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON found in response");
       const raw = JSON.parse(jsonMatch[0]);
       parsed = raw.results && Array.isArray(raw.results) && raw.results.length > 0 ? raw.results[0] : raw;
+      if (!parsed.status) throw new Error("Missing status in JSON");
     } catch (e) {
+      logger.warn("Failed to parse Groq response", { response: verifyResponse.slice(0, 500), error: String(e) });
       return {
         id, text: sentence, status: "unverifiable",
         correction: "Could not parse AI response.",

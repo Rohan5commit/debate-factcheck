@@ -4,6 +4,8 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
+import { DebugPanel } from "./debug-panel";
+import { pushLog } from "@/lib/debug-log";
 
 const BATCH_SIZE = 3;
 
@@ -46,6 +48,7 @@ export function LiveMode() {
       if (batch.length === 0) break;
 
       const textToCheck = batch.join(" ");
+      pushLog("info", "fact-check", "checking batch", { sentences: batch.length, textPreview: textToCheck.slice(0, 80) });
       await new Promise<void>((resolve) => {
         checkLive(textToCheck);
         setTimeout(resolve, 100);
@@ -71,6 +74,7 @@ export function LiveMode() {
     );
 
     if (unchecked.length > 0) {
+      pushLog("info", "fact-check", "new sentences detected", { total: sentences.length, unchecked: unchecked.length });
       lastCheckedRef.current = transcript;
       processingQueueRef.current.push(...unchecked);
       processQueue();
@@ -123,8 +127,9 @@ export function LiveMode() {
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
         <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
-        transcription. Audio is captured in 8-second chunks with overlap for
-        context. Sentences are fact-checked automatically.
+        transcription. Audio is captured in 5-second chunks. Sentences are
+        fact-checked automatically — newest at top. Open Debug Logs below to see
+        live processing.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -215,6 +220,8 @@ export function LiveMode() {
         </p>
       </div>
 
+      <DebugPanel />
+
       {(isChecking || pendingCount > 0) && (
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -225,7 +232,7 @@ export function LiveMode() {
       )}
 
       <div className="space-y-3">
-        {results.map((result) => (
+        {[...results].reverse().map((result) => (
           <FactCheckCard key={result.id} result={result} />
         ))}
       </div>
