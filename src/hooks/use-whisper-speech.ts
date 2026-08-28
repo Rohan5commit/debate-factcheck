@@ -99,6 +99,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const sampleBufferRef = useRef<Float32Array[]>([]);
   const queueRef = useRef<Float32Array[][]>([]);
+  const isListeningRef = useRef(false);
   const processingRef = useRef(false);
 
   const isSupported = checkSupport();
@@ -201,7 +202,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       processingRef.current = false;
 
       processor.onaudioprocess = (event: AudioProcessingEvent) => {
-        if (!isListening) return;
+        if (!isListeningRef.current) return;
         const inputData = event.inputBuffer.getChannelData(0);
         sampleBufferRef.current.push(new Float32Array(inputData));
       };
@@ -227,6 +228,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
         }
       }, checkInterval);
 
+      isListeningRef.current = true;
       setIsListening(true);
       setError(null);
       setStatus(null);
@@ -237,7 +239,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
           : "Could not access microphone"
       );
     }
-  }, [flushBuffer, isListening]);
+  }, [flushBuffer]);
 
   const stopListening = useCallback(() => {
     if (intervalRef.current) {
@@ -263,6 +265,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     }
 
     flushBuffer();
+    isListeningRef.current = false;
     setIsListening(false);
     setStatus(null);
   }, [flushBuffer]);
