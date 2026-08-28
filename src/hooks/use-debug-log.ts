@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   getLogs,
   subscribeLogs,
@@ -14,7 +14,12 @@ export function useDebugLog(): {
   clear: () => void;
   exportJson: () => string;
 } {
-  const logs = useSyncExternalStore(subscribeLogs, getLogs, getLogs);
+  const [logs, setLogs] = useState<DebugEntry[]>(() => getLogs());
+
+  useEffect(() => {
+    return subscribeLogs(() => setLogs([...getLogs()]));
+  }, []);
+
   const clear = useCallback(() => clearLogs(), []);
   const exportJson = useCallback(() => exportLogsJson(), []);
   return { logs, clear, exportJson };
