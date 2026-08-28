@@ -99,6 +99,8 @@ function resampleFloat32(
   return result;
 }
 
+// kept for fallback, but main path now sends native rate directly to Groq
+
 export function useWhisperSpeech(): WhisperSpeechHook {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -135,23 +137,20 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     }
 
     const actualRate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
-    const resampled = resampleFloat32(merged, actualRate, TARGET_SAMPLE_RATE);
     pushLog("info", "encode", "encoding WAV", {
       actualRate,
-      targetRate: TARGET_SAMPLE_RATE,
       inputSamples: merged.length,
-      resampledSamples: resampled.length,
       rms: rms.toFixed(4),
     });
 
-    const wavBlob = encodeWAV(floatTo16BitPCM(resampled), TARGET_SAMPLE_RATE);
+    const wavBlob = encodeWAV(floatTo16BitPCM(merged), actualRate);
 
     if (wavBlob.size < 1000) {
       pushLog("warn", "encode", "wav too small, skipping", { size: wavBlob.size });
       return null;
     }
 
-    pushLog("info", "transcribe", "sending to Groq", { wavBytes: wavBlob.size, durationSec: (resampled.length / TARGET_SAMPLE_RATE).toFixed(1) });
+    pushLog("info", "transcribe", "sending to Groq", { wavBytes: wavBlob.size, durationSec: (merged.length / actualRate).toFixed(1) });
     const t0 = Date.now();
 
     const formData = new FormData();
@@ -252,8 +251,8 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: true,
         },
       });
@@ -283,8 +282,11 @@ export function useWhisperSpeech(): WhisperSpeechHook {
         sampleBufferRef.current.push(new Float32Array(inputData));
       };
 
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
       source.connect(processor);
-      processor.connect(audioContext.destination);
+      processor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
 
       audioContextRef.current = audioContext;
       processorRef.current = processor;
