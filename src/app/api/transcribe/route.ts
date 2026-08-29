@@ -21,11 +21,10 @@ export async function POST(request: NextRequest) {
 
     const whisperFormData = new FormData();
     whisperFormData.append("file", audioFile, audioFile.name || "audio.wav");
-    whisperFormData.append("model", "whisper-large-v3-turbo");
+    whisperFormData.append("model", "whisper-large-v3");
     whisperFormData.append("language", "en");
     whisperFormData.append("response_format", "verbose_json");
     whisperFormData.append("temperature", "0");
-    whisperFormData.append("prompt", "Model United Nations debate. Formal English, country names, UN topics, international relations.");
 
     const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",

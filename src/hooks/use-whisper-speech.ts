@@ -32,7 +32,10 @@ function floatTo16BitPCM(float32Array: Float32Array): Int16Array {
   const int16 = new Int16Array(float32Array.length);
   for (let i = 0; i < float32Array.length; i++) {
     const s = Math.max(-1, Math.min(1, float32Array[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    const v = s < 0 ? s * 0x8000 : s * 0x7fff;
+    int16[i] = Math.round(v);
+    if (int16[i] === 32768) int16[i] = 32767;
+    if (int16[i] < -32768) int16[i] = -32768;
   }
   return int16;
 }
@@ -109,19 +112,24 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const sampleBufferRef = useRef<Float32Array[]>([]);
-  const queueRef = useRef<Float32Array[][]>([]);
+  const queueRef = useRef<Array<{ samples: Float32Array[]; rate: number }>>([]);
   const overlapRef = useRef<Float32Array | null>(null);
   const isListeningRef = useRef(false);
   const processingRef = useRef(false);
+  const lastTranscriptTailRef = useRef<string>("");
 
   const isSupported = checkSupport();
 
-  const transcribeChunk = async (samples: Float32Array[]): Promise<string | null> => {
+  const transcribeChunk = async (
+    samples: Float32Array[],
+    capturedRate: number
+  ): Promise<string | null> => {
     const totalLength = samples.reduce((sum, s) => sum + s.length, 0);
     const merged = new Float32Array(totalLength);
     let offset = 0;
@@ -136,7 +144,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       return null;
     }
 
-    const actualRate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
+    const actualRate = capturedRate;
     pushLog("info", "encode", "encoding WAV", {
       actualRate,
       inputSamples: merged.length,
@@ -180,7 +188,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     processingRef.current = true;
 
     while (queueRef.current.length > 0) {
-      const samples = queueRef.current.shift()!;
+      const { samples, rate } = queueRef.current.shift()!;
       setStatus("Transcribing...");
 
       let text: string | null = null;
@@ -188,7 +196,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          text = await transcribeChunk(samples);
+          text = await transcribeChunk(samples, rate);
           succeeded = true;
           break;
         } catch (e) {
@@ -202,11 +210,35 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       }
 
       if (succeeded && text && text.length > 0) {
+        let deduped = text;
+        const tail = lastTranscriptTailRef.current;
+        if (tail) {
+          const tailWords = tail.split(/\s+/).slice(-6).join(" ");
+          if (tailWords.length > 10 && deduped.toLowerCase().startsWith(tailWords.toLowerCase().slice(0, 20))) {
+            const idx = deduped.toLowerCase().indexOf(tailWords.toLowerCase().split(" ").slice(-2).join(" "));
+            if (idx > 0 && idx < 40) deduped = deduped.slice(idx).trim();
+          }
+          const overlapPhrases = tail.split(/(?<=[.!?])\s+/).slice(-1)[0];
+          if (overlapPhrases && deduped.toLowerCase().includes(overlapPhrases.toLowerCase().slice(0, 15))) {
+            // no-op, keep as is but log
+          }
+        }
+        // simple duplicate prefix check: if deduped starts with tail's last 30 chars
+        if (tail && deduped.length > 0) {
+          const last30 = tail.slice(-30).toLowerCase();
+          const dedupLower = deduped.toLowerCase();
+          if (last30.length > 10 && dedupLower.startsWith(last30.slice(-15))) {
+            pushLog("info", "capture", "dedup trimmed overlap", { before: text.slice(0, 40), after: deduped.slice(0, 40) });
+          }
+        }
+
         setTranscript((prev) => {
           const trimmed = prev.trim();
-          return trimmed ? `${trimmed} ${text}` : text;
+          const newText = trimmed ? `${trimmed} ${deduped}` : deduped;
+          lastTranscriptTailRef.current = deduped;
+          return newText;
         });
-        pushLog("info", "capture", "transcript appended", { textLen: text.length });
+        pushLog("info", "capture", "transcript appended", { textLen: deduped.length, deduped: deduped.length !== text.length });
       } else if (!succeeded) {
         pushLog("error", "transcribe", "chunk failed after retries, skipping", {});
         setStatus("Transcription failed — skipping chunk");
@@ -216,9 +248,8 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       setStatus(null);
 
       if (succeeded && text) {
-        const actualRate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
         const totalLen = samples.reduce((s, c) => s + c.length, 0);
-        const overlapSamples = Math.round(OVERLAP_SECONDS * actualRate);
+        const overlapSamples = Math.round(OVERLAP_SECONDS * rate);
         const merged = new Float32Array(totalLen);
         let off = 0;
         for (const c of samples) { merged.set(c, off); off += c.length; }
@@ -232,18 +263,19 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const flushBuffer = useCallback(() => {
     if (sampleBufferRef.current.length === 0) return;
+    const rate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
     let samples = [...sampleBufferRef.current];
     sampleBufferRef.current = [];
 
     if (overlapRef.current && overlapRef.current.length > 0) {
       samples = [overlapRef.current, ...samples];
-      pushLog("info", "capture", "flushing with overlap", { overlapSamples: overlapRef.current.length, chunks: samples.length });
+      pushLog("info", "capture", "flushing with overlap", { overlapSamples: overlapRef.current.length, chunks: samples.length, rate });
     } else {
-      pushLog("info", "capture", "flushing chunk", { chunks: samples.length, totalSamples: samples.reduce((s,c)=>s+c.length,0) });
+      pushLog("info", "capture", "flushing chunk", { chunks: samples.length, totalSamples: samples.reduce((s,c)=>s+c.length,0), rate });
     }
 
-    queueRef.current.push(samples);
-    pushLog("info", "capture", "queued for transcription", { queueLen: queueRef.current.length });
+    queueRef.current.push({ samples, rate });
+    pushLog("info", "capture", "queued for transcription", { queueLen: queueRef.current.length, rate });
     processQueue();
   }, [processQueue]);
 
@@ -269,27 +301,51 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       };
 
       const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
 
       sampleBufferRef.current = [];
       queueRef.current = [];
       overlapRef.current = null;
       processingRef.current = false;
 
-      processor.onaudioprocess = (event: AudioProcessingEvent) => {
-        if (!isListeningRef.current) return;
-        const inputData = event.inputBuffer.getChannelData(0);
-        sampleBufferRef.current.push(new Float32Array(inputData));
-      };
+      let useWorklet = false;
+      let workletNode: AudioWorkletNode | null = null;
+      let processor: ScriptProcessorNode | null = null;
 
-      const silentGain = audioContext.createGain();
-      silentGain.gain.value = 0;
-      source.connect(processor);
-      processor.connect(silentGain);
+      try {
+        if (audioContext.audioWorklet) {
+          await audioContext.audioWorklet.addModule("/worklets/capture-worklet.js");
+          workletNode = new AudioWorkletNode(audioContext, "capture-processor");
+          workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+            if (!isListeningRef.current) return;
+            sampleBufferRef.current.push(new Float32Array(event.data));
+          };
+          source.connect(workletNode);
+          workletNode.connect(silentGain);
+          useWorklet = true;
+          pushLog("info", "system", "using AudioWorklet", {});
+          workletNodeRef.current = workletNode;
+        } else {
+          throw new Error("audioWorklet not supported");
+        }
+      } catch (e) {
+        pushLog("warn", "system", "AudioWorklet failed, fallback to ScriptProcessor", { error: String(e) });
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        (processor as ScriptProcessorNode).onaudioprocess = (event: AudioProcessingEvent) => {
+          if (!isListeningRef.current) return;
+          const inputData = event.inputBuffer.getChannelData(0);
+          sampleBufferRef.current.push(new Float32Array(inputData));
+        };
+        source.connect(processor as ScriptProcessorNode);
+        (processor as ScriptProcessorNode).connect(silentGain);
+        processorRef.current = processor as ScriptProcessorNode;
+        useWorklet = false;
+      }
+
       silentGain.connect(audioContext.destination);
 
       audioContextRef.current = audioContext;
-      processorRef.current = processor;
       sourceRef.current = source;
       streamRef.current = stream;
 
@@ -332,9 +388,18 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       intervalRef.current = null;
     }
 
+    if (sampleBufferRef.current.length > 0) {
+      flushBuffer();
+    }
+
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current = null;
+    }
+    if (workletNodeRef.current) {
+      try { workletNodeRef.current.port.close(); } catch {}
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
     }
     if (sourceRef.current) {
       sourceRef.current.disconnect();
@@ -349,7 +414,6 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       streamRef.current = null;
     }
 
-    flushBuffer();
     isListeningRef.current = false;
     setIsListening(false);
     setStatus(null);
@@ -361,6 +425,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     sampleBufferRef.current = [];
     queueRef.current = [];
     overlapRef.current = null;
+    lastTranscriptTailRef.current = "";
   }, []);
 
   return {
