@@ -18,7 +18,7 @@ const CHUNK_SECONDS = 5;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 2;
 const SILENCE_RMS_THRESHOLD = 0.008;
-const OVERLAP_SECONDS = 0.5;
+const OVERLAP_SECONDS = 1.2;
 
 function checkSupport(): boolean {
   return (
@@ -123,6 +123,8 @@ export function useWhisperSpeech(): WhisperSpeechHook {
   const isListeningRef = useRef(false);
   const processingRef = useRef(false);
   const lastTranscriptTailRef = useRef<string>("");
+  const chunkIndexRef = useRef(0);
+  const visibilityHandlerRef = useRef<(() => void) | null>(null);
 
   const isSupported = checkSupport();
 
@@ -261,21 +263,56 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     processingRef.current = false;
   }, []);
 
-  const flushBuffer = useCallback(() => {
+  const flushBuffer = useCallback((force = false) => {
     if (sampleBufferRef.current.length === 0) return;
     const rate = audioContextRef.current?.sampleRate || TARGET_SAMPLE_RATE;
-    let samples = [...sampleBufferRef.current];
-    sampleBufferRef.current = [];
+    const targetSamples = Math.round(rate * CHUNK_SECONDS);
+    const totalAvailable = sampleBufferRef.current.reduce((s, c) => s + c.length, 0);
+    if (!force && totalAvailable < targetSamples) return;
 
-    if (overlapRef.current && overlapRef.current.length > 0) {
-      samples = [overlapRef.current, ...samples];
-      pushLog("info", "capture", "flushing with overlap", { overlapSamples: overlapRef.current.length, chunks: samples.length, rate });
+    let toFlush: Float32Array[] = [];
+    if (force && totalAvailable < targetSamples) {
+      toFlush = [...sampleBufferRef.current];
+      sampleBufferRef.current = [];
+      pushLog("info", "capture", "flushing tail", {
+        chunks: toFlush.length,
+        totalSamples: totalAvailable,
+        rate,
+        durationSec: (totalAvailable / rate).toFixed(2),
+      });
     } else {
-      pushLog("info", "capture", "flushing chunk", { chunks: samples.length, totalSamples: samples.reduce((s,c)=>s+c.length,0), rate });
+      let remaining = targetSamples;
+      while (remaining > 0 && sampleBufferRef.current.length > 0) {
+        const first = sampleBufferRef.current[0];
+        if (first.length <= remaining) {
+          toFlush.push(sampleBufferRef.current.shift()!);
+          remaining -= first.length;
+        } else {
+          toFlush.push(first.slice(0, remaining));
+          sampleBufferRef.current[0] = first.slice(remaining);
+          remaining = 0;
+        }
+      }
     }
 
+    let samples = toFlush;
+    if (overlapRef.current && overlapRef.current.length > 0) {
+      samples = [overlapRef.current, ...samples];
+    }
+
+    const chunkIndex = chunkIndexRef.current++;
+    const totalSamples = samples.reduce((s, c) => s + c.length, 0);
+    pushLog("info", "capture", "flushing chunk", {
+      chunkIndex,
+      chunks: samples.length,
+      totalSamples,
+      rate,
+      durationSec: (totalSamples / rate).toFixed(2),
+      remainder: sampleBufferRef.current.reduce((s, c) => s + c.length, 0),
+    });
+
     queueRef.current.push({ samples, rate });
-    pushLog("info", "capture", "queued for transcription", { queueLen: queueRef.current.length, rate });
+    pushLog("info", "capture", "queued for transcription", { chunkIndex, queueLen: queueRef.current.length, rate });
     processQueue();
   }, [processQueue]);
 
@@ -308,6 +345,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       queueRef.current = [];
       overlapRef.current = null;
       processingRef.current = false;
+      chunkIndexRef.current = 0;
 
       let useWorklet = false;
       let workletNode: AudioWorkletNode | null = null;
@@ -360,14 +398,16 @@ export function useWhisperSpeech(): WhisperSpeechHook {
         if (totalSamples >= totalSamplesPerChunk) {
           flushBuffer();
         }
-      }, 1000);
+      }, 250);
 
-      document.addEventListener("visibilitychange", () => {
+      const visHandler = () => {
         if (document.visibilityState === "visible" && audioContext.state === "suspended") {
           audioContext.resume();
           pushLog("info", "system", "visibilitychange resume", {});
         }
-      });
+      };
+      visibilityHandlerRef.current = visHandler;
+      document.addEventListener("visibilitychange", visHandler);
 
       isListeningRef.current = true;
       setIsListening(true);
@@ -388,8 +428,13 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       intervalRef.current = null;
     }
 
+    if (visibilityHandlerRef.current) {
+      document.removeEventListener("visibilitychange", visibilityHandlerRef.current);
+      visibilityHandlerRef.current = null;
+    }
+
     if (sampleBufferRef.current.length > 0) {
-      flushBuffer();
+      (flushBuffer as (force?: boolean) => void)(true);
     }
 
     if (processorRef.current) {
@@ -426,6 +471,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     queueRef.current = [];
     overlapRef.current = null;
     lastTranscriptTailRef.current = "";
+    chunkIndexRef.current = 0;
   }, []);
 
   return {
