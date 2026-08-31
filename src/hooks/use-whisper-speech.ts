@@ -18,7 +18,7 @@ const CHUNK_SECONDS = 5;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 2;
 const SILENCE_RMS_THRESHOLD = 0.008;
-const OVERLAP_SECONDS = 1.2;
+const OVERLAP_SECONDS = 0.5;
 
 function checkSupport(): boolean {
   return (
@@ -270,30 +270,8 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     const totalAvailable = sampleBufferRef.current.reduce((s, c) => s + c.length, 0);
     if (!force && totalAvailable < targetSamples) return;
 
-    let toFlush: Float32Array[] = [];
-    if (force && totalAvailable < targetSamples) {
-      toFlush = [...sampleBufferRef.current];
-      sampleBufferRef.current = [];
-      pushLog("info", "capture", "flushing tail", {
-        chunks: toFlush.length,
-        totalSamples: totalAvailable,
-        rate,
-        durationSec: (totalAvailable / rate).toFixed(2),
-      });
-    } else {
-      let remaining = targetSamples;
-      while (remaining > 0 && sampleBufferRef.current.length > 0) {
-        const first = sampleBufferRef.current[0];
-        if (first.length <= remaining) {
-          toFlush.push(sampleBufferRef.current.shift()!);
-          remaining -= first.length;
-        } else {
-          toFlush.push(first.slice(0, remaining));
-          sampleBufferRef.current[0] = first.slice(remaining);
-          remaining = 0;
-        }
-      }
-    }
+    const toFlush = [...sampleBufferRef.current];
+    sampleBufferRef.current = [];
 
     let samples = toFlush;
     if (overlapRef.current && overlapRef.current.length > 0) {
@@ -398,7 +376,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
         if (totalSamples >= totalSamplesPerChunk) {
           flushBuffer();
         }
-      }, 250);
+      }, 1000);
 
       const visHandler = () => {
         if (document.visibilityState === "visible" && audioContext.state === "suspended") {
