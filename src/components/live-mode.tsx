@@ -5,6 +5,7 @@ import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
 import { DebugPanel } from "./debug-panel";
+import { AudioUpload } from "./audio-upload";
 import { pushLog } from "@/lib/debug-log";
 
 const BATCH_SIZE = 3;
@@ -221,6 +222,8 @@ export function LiveMode() {
       </div>
 
       <DebugPanel />
+
+      <AudioUpload />
 
       {(isChecking || pendingCount > 0) && (
         <div className="flex items-center gap-2 text-sm text-gray-600">

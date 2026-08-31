@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
+import { AudioUpload } from "./audio-upload";
 
 export function PrepMode() {
   const [inputText, setInputText] = useState("");
@@ -190,6 +191,8 @@ export function PrepMode() {
           </span>
         </div>
       )}
+
+      <AudioUpload />
 
       <div className="space-y-3">
         {results.map((result) => (

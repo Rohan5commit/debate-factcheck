@@ -22,9 +22,9 @@ export async function POST(request: NextRequest) {
     const whisperFormData = new FormData();
     whisperFormData.append("file", audioFile, audioFile.name || "audio.wav");
     whisperFormData.append("model", "whisper-large-v3");
-    whisperFormData.append("language", "en");
     whisperFormData.append("response_format", "verbose_json");
     whisperFormData.append("temperature", "0");
+    whisperFormData.append("prompt", "Hinglish, Hindi and English mixed, Indian accent, conversational. Model United Nations debate.");
 
     const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await response.json();
+    logger.info("Groq transcription success", { language: result.language, duration: result.duration, textLen: result.text?.length || 0 });
 
     return NextResponse.json({
       text: result.text || "",
