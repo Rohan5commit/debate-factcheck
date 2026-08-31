@@ -24,7 +24,6 @@ export async function POST(request: NextRequest) {
     whisperFormData.append("model", "whisper-large-v3");
     whisperFormData.append("response_format", "verbose_json");
     whisperFormData.append("temperature", "0");
-    whisperFormData.append("prompt", "Hinglish, Hindi and English mixed, Indian accent, conversational. Model United Nations debate.");
 
     const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
