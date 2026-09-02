@@ -128,9 +128,9 @@ export function LiveMode() {
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
         <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
-        transcription. Audio is captured in 5-second chunks. Sentences are
+        multilingual transcription. Audio is captured in 10-second chunks. Sentences are
         fact-checked automatically — newest at top. Open Debug Logs below to see
-        live processing.
+        live processing and detected language.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

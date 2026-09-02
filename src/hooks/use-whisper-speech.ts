@@ -14,11 +14,11 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-const CHUNK_SECONDS = 5;
+const CHUNK_SECONDS = 10;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 2;
 const SILENCE_RMS_THRESHOLD = 0.008;
-const OVERLAP_SECONDS = 0.5;
+const OVERLAP_SECONDS = 1.0;
 
 function checkSupport(): boolean {
   return (
@@ -181,7 +181,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
     const result = await response.json();
     const text = result.text?.trim() || null;
-    pushLog("info", "transcribe", text ? "transcribed" : "empty result", { latencyMs: latency, textLen: text?.length || 0, textPreview: text?.slice(0, 80) || "" });
+    pushLog("info", "transcribe", text ? "transcribed" : "empty result", { latencyMs: latency, language: result.language || "unknown", textLen: text?.length || 0, textPreview: text?.slice(0, 80) || "" });
     return text;
   };
 
