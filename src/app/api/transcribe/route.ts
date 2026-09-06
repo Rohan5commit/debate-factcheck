@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { logger } from "@/lib/logger";
 
-export const maxDuration = 60;
+export const maxDuration = 10;
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,19 +17,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
     }
 
+    if (audioFile.size > 2 * 1024 * 1024) {
+      return NextResponse.json({ error: "Audio file too large (max 2MB for free tier)" }, { status: 413 });
+    }
+
     logger.info("Transcription request via Groq", { size: audioFile.size, type: audioFile.type });
 
     const whisperFormData = new FormData();
     whisperFormData.append("file", audioFile, audioFile.name || "audio.wav");
-    whisperFormData.append("model", "whisper-large-v3");
+    whisperFormData.append("model", "whisper-large-v3-turbo");
+    whisperFormData.append("language", "en");
     whisperFormData.append("response_format", "verbose_json");
     whisperFormData.append("temperature", "0");
 
-    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: whisperFormData,
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+    let response: Response;
+    try {
+      response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: whisperFormData,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errorBody = await response.text();

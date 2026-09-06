@@ -14,11 +14,12 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-const CHUNK_SECONDS = 10;
+const CHUNK_SECONDS = 3;
 const TARGET_SAMPLE_RATE = 16000;
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 1;
 const SILENCE_RMS_THRESHOLD = 0.008;
-const OVERLAP_SECONDS = 1.0;
+const OVERLAP_SECONDS = 0;
+const MAX_QUEUE = 2;
 
 function checkSupport(): boolean {
   return (
@@ -166,10 +167,18 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     const formData = new FormData();
     formData.append("audio", wavBlob, "audio.wav");
 
-    const response = await fetch("/api/transcribe", {
-      method: "POST",
-      body: formData,
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+    let response: Response;
+    try {
+      response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const latency = Date.now() - t0;
 
@@ -290,6 +299,10 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     });
 
     queueRef.current.push({ samples, rate });
+    if (queueRef.current.length > MAX_QUEUE) {
+      const dropped = queueRef.current.splice(0, queueRef.current.length - MAX_QUEUE);
+      pushLog("warn", "capture", "queue overflow, dropped oldest", { dropped: dropped.length, queueLen: queueRef.current.length, rate });
+    }
     pushLog("info", "capture", "queued for transcription", { chunkIndex, queueLen: queueRef.current.length, rate });
     processQueue();
   }, [processQueue]);

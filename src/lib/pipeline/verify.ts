@@ -16,8 +16,20 @@ function isFactual(sentence: string): boolean {
   return true;
 }
 
+const STOPWORDS = new Set(
+  "a,an,the,and,or,but,if,then,else,when,while,of,at,by,for,with,about,as,into,through,during,before,after,above,below,to,from,up,down,in,out,on,off,over,under,again,further,once,here,there,when,where,why,how,all,any,both,each,few,more,most,other,some,such,no,nor,not,only,own,same,so,than,too,very,can,will,just,don,should,now,you,guys,like,know,um,uh,yeah,okay,well,actually,really,very,just,so".split(",")
+);
+
+const claimCache = new Map<string, FactCheckResult>();
+
 function buildSearchQuery(sentence: string): string {
-  return sentence.split(/\s+/).slice(0, 10).join(" ");
+  const keywords = sentence
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+  const unique = [...new Set(keywords)];
+  return unique.slice(0, 8).join(" ") || sentence.split(/\s+/).slice(0, 10).join(" ");
 }
 
 function buildVerificationPrompt(
@@ -70,6 +82,11 @@ async function callWithRetry(
 }
 
 async function verifySentence(sentence: string): Promise<FactCheckResult> {
+  const cacheKey = sentence.trim().toLowerCase();
+  const cached = claimCache.get(cacheKey);
+  if (cached) {
+    return { ...cached, id: `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: sentence };
+  }
   const id = `fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (!isFactual(sentence)) {
@@ -136,9 +153,19 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
     let parsed: { status: string; correction: string; sourceIndices: number[] };
     try {
       const cleaned = verifyResponse.replace(/```json|```/g, "").trim();
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found in response");
-      const raw = JSON.parse(jsonMatch[0]);
+      let raw: Record<string, unknown>;
+      try {
+        raw = JSON.parse(cleaned);
+      } catch {
+        const jsonMatch = cleaned.match(/\{[^{}]*"status"[^{}]*\}/);
+        if (!jsonMatch) {
+          const greedy = cleaned.match(/\{[\s\S]*\}/);
+          if (!greedy) throw new Error("No JSON found in response");
+          raw = JSON.parse(greedy[0]);
+        } else {
+          raw = JSON.parse(jsonMatch[0]);
+        }
+      }
       parsed = raw.results && Array.isArray(raw.results) && raw.results.length > 0 ? raw.results[0] : raw;
       if (!parsed.status) throw new Error("Missing status in JSON");
     } catch (e) {
@@ -158,11 +185,17 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
       ? (parsed.status as FactCheckStatus)
       : "unverifiable";
 
-    return {
+    const finalResult = {
       id, text: sentence, status,
       correction: parsed.correction || "",
       sources: resultSources, timestamp: Date.now(),
     };
+    if (claimCache.size > 200) {
+      const firstKey = claimCache.keys().next().value;
+      if (firstKey) claimCache.delete(firstKey);
+    }
+    claimCache.set(cacheKey, finalResult);
+    return finalResult;
   } catch (e) {
     return {
       id, text: sentence, status: "unverifiable",
@@ -173,16 +206,23 @@ async function verifySentence(sentence: string): Promise<FactCheckResult> {
 }
 
 async function verifySentenceWithRetry(sentence: string): Promise<FactCheckResult> {
+  const withTimeout = (p: Promise<FactCheckResult>, ms: number): Promise<FactCheckResult> =>
+    Promise.race([
+      p,
+      new Promise<FactCheckResult>((_, reject) =>
+        setTimeout(() => reject(new Error("verify timeout 15s")), ms)
+      ),
+    ]);
   let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await verifySentence(sentence);
+      return await withTimeout(verifySentence(sentence), 15000);
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
       logger.warn(`Verify attempt ${attempt + 1} failed for: ${sentence.slice(0, 50)}`, {
         error: lastError.message,
       });
-      if (attempt < 2) {
+      if (attempt < 1) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
       }
     }

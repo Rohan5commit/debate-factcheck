@@ -2,15 +2,28 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
+import { useStreamingSpeech } from "@/hooks/use-streaming-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
 import { DebugPanel } from "./debug-panel";
 import { AudioUpload } from "./audio-upload";
 import { pushLog } from "@/lib/debug-log";
 
-const BATCH_SIZE = 3;
+const BATCH_SIZE = 2;
+
+function getSttMode(): "stream" | "groq" {
+  if (typeof window === "undefined") return "stream";
+  const q = new URLSearchParams(window.location.search).get("stt");
+  if (q === "groq" || q === "stream") return q;
+  return "stream";
+}
 
 export function LiveMode() {
+  const [sttMode] = useState<"stream" | "groq">(getSttMode);
+  const whisper = useWhisperSpeech();
+  const streaming = useStreamingSpeech();
+  const useStream = sttMode === "stream" && streaming.isSupported;
+
   const {
     isListening,
     transcript,
@@ -20,7 +33,8 @@ export function LiveMode() {
     startListening,
     stopListening,
     resetTranscript,
-  } = useWhisperSpeech();
+  } = useStream ? { ...streaming, transcript: streaming.transcript } : whisper;
+  const interim = useStream ? streaming.interim : "";
 
   const {
     results,
@@ -30,6 +44,7 @@ export function LiveMode() {
     pendingCount,
     checkLive,
     retryLast,
+    clearResults,
     testApiKeys,
   } = useFactCheck();
 
@@ -88,6 +103,7 @@ export function LiveMode() {
 
   const handleClear = () => {
     resetTranscript();
+    clearResults();
     checkedSentencesRef.current = new Set();
     lastCheckedRef.current = "";
     processingQueueRef.current = [];
@@ -127,10 +143,10 @@ export function LiveMode() {
   return (
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
-        <strong>Debate Mode Active:</strong> Uses Groq Whisper for accurate
-        multilingual transcription. Audio is captured in 10-second chunks. Sentences are
-        fact-checked automatically — newest at top. Open Debug Logs below to see
-        live processing and detected language.
+        <strong>Debate Mode Active:</strong> Live streaming transcription
+        ({useStream ? "instant" : "Groq fallback — add ?stt=stream for instant"}).
+        Sentences are fact-checked automatically — newest at top. Open Debug Logs below to see
+        live processing.
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -214,10 +230,11 @@ export function LiveMode() {
         </div>
       )}
 
-      <div className="p-4 bg-gray-50 rounded-lg min-h-[100px]">
+      <div className="p-4 bg-gray-50 rounded-lg min-h-[100px] max-h-[220px] overflow-auto">
         <p className="text-sm text-gray-500 mb-2">Transcript:</p>
         <p className="text-gray-900">
           {transcript || "Click 'Start Recording' to begin fact-checking..."}
+          {interim && <span className="text-gray-400"> {interim}</span>}
         </p>
       </div>
 
