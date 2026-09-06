@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const whisperFormData = new FormData();
     whisperFormData.append("file", audioFile, audioFile.name || "audio.wav");
-    whisperFormData.append("model", "whisper-large-v3-turbo");
+    whisperFormData.append("model", "whisper-large-v3");
     whisperFormData.append("language", "en");
     whisperFormData.append("response_format", "verbose_json");
     whisperFormData.append("temperature", "0");

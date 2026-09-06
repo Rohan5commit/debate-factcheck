@@ -14,7 +14,7 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-const CHUNK_SECONDS = 3;
+const CHUNK_SECONDS = 5;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 1;
 const SILENCE_RMS_THRESHOLD = 0.008;

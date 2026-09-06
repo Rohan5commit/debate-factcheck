@@ -7,6 +7,7 @@ interface StreamingSpeechHook {
   isListening: boolean;
   transcript: string;
   interim: string;
+  silentCount: number;
   isSupported: boolean;
   error: string | null;
   status: string | null;
@@ -27,6 +28,7 @@ export function useStreamingSpeech(): StreamingSpeechHook {
   const [interim, setInterim] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [silentCount, setSilentCount] = useState(0);
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const isListeningRef = useRef(false);
@@ -79,11 +81,13 @@ export function useStreamingSpeech(): StreamingSpeechHook {
       finalText = finalText.trim();
       if (interimText) {
         noSpeechCountRef.current = 0;
+        setSilentCount(0);
         setInterim(interimText);
         setStatus(`Hearing: ${interimText.slice(0, 60)}`);
       }
       if (finalText) {
         noSpeechCountRef.current = 0;
+        setSilentCount(0);
         finalRef.current = finalRef.current ? `${finalRef.current} ${finalText}` : finalText;
         setTranscript(finalRef.current);
         setInterim("");
@@ -99,6 +103,7 @@ export function useStreamingSpeech(): StreamingSpeechHook {
       const err = event.error;
       if (err === "no-speech" || err === "audio-capture") {
         const n = ++noSpeechCountRef.current;
+        setSilentCount(n);
         pushLog("warn", "transcribe", "stream notice", { error: err, consecutiveSilent: n });
         if (n === 2) {
           setStatus("No speech detected — check mic volume and playback device. See tip below.");
@@ -149,6 +154,8 @@ export function useStreamingSpeech(): StreamingSpeechHook {
     recognitionRef.current = recognition;
     isListeningRef.current = true;
     noSpeechCountRef.current = 0;
+    setSilentCount(0);
+    noSpeechCountRef.current = 0;
     try {
       recognition.start();
       setIsListening(true);
@@ -188,10 +195,11 @@ export function useStreamingSpeech(): StreamingSpeechHook {
   const resetTranscript = useCallback(() => {
     finalRef.current = "";
     noSpeechCountRef.current = 0;
+    setSilentCount(0);
     setTranscript("");
     setInterim("");
     setError(null);
   }, []);
 
-  return { isListening, transcript, interim, isSupported, error, status, startListening, stopListening, resetTranscript };
+  return { isListening, transcript, interim, silentCount, isSupported, error, status, startListening, stopListening, resetTranscript };
 }

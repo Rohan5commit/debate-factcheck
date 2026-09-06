@@ -13,10 +13,10 @@ import { pushLog } from "@/lib/debug-log";
 const BATCH_SIZE = 2;
 
 function getSttMode(): "stream" | "groq" {
-  if (typeof window === "undefined") return "stream";
+  if (typeof window === "undefined") return "groq";
   const q = new URLSearchParams(window.location.search).get("stt");
   if (q === "groq" || q === "stream") return q;
-  return "stream";
+  return "groq";
 }
 
 export function LiveMode() {
@@ -36,6 +36,24 @@ export function LiveMode() {
     resetTranscript,
   } = useStream ? { ...streaming, transcript: streaming.transcript } : whisper;
   const interim = useStream ? streaming.interim : "";
+  const streamSilent = useStream ? streaming.silentCount : 0;
+
+  // Auto-rescue: streaming recognizer hears nothing but mic is live
+  // (Comet's SpeechRecognition is non-functional) → switch to Groq.
+  useEffect(() => {
+    if (useStream && isListening && streamSilent >= 3 && !transcript) {
+      pushLog("warn", "system", "auto-switching to Groq, stream heard only silence", {
+        silentCount: streamSilent,
+      });
+      try {
+        streaming.stopListening();
+      } catch {}
+      setSttMode("groq");
+      setTimeout(() => {
+        whisper.startListening();
+      }, 300);
+    }
+  }, [useStream, isListening, streamSilent, transcript, streaming, whisper]);
 
   const {
     results,
@@ -158,13 +176,23 @@ export function LiveMode() {
   return (
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
-        <strong>Debate Mode Active:</strong> Live streaming transcription
-        ({useStream ? "instant" : "Groq fallback"}).
-        Sentences are fact-checked automatically — newest at top. Open Debug Logs below to see
-        live processing.
+        <strong>Debate Mode Active:</strong> Groq Whisper transcription
+        (5-second chunks). Sentences are fact-checked automatically — newest at top.
+        Open Debug Logs below to see live processing.
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setSttMode("groq")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            !useStream
+              ? "bg-blue-500 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+          title="Groq Whisper transcription, recommended"
+        >
+          Groq (recommended)
+        </button>
         <button
           onClick={() => setSttMode("stream")}
           disabled={!streaming.isSupported}
@@ -173,20 +201,9 @@ export function LiveMode() {
               ? "bg-blue-500 text-white"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           } disabled:opacity-50`}
-          title={streaming.isSupported ? "Instant browser transcription" : "Not supported in this browser"}
+          title={streaming.isSupported ? "Instant browser transcription (Chrome-only, experimental)" : "Not supported in this browser"}
         >
           Stream
-        </button>
-        <button
-          onClick={() => setSttMode("groq")}
-          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            !useStream
-              ? "bg-blue-500 text-white"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-          title="Groq Whisper transcription (3s chunks)"
-        >
-          Groq
         </button>
       </div>
 
