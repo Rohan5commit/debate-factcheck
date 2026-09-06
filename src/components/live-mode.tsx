@@ -7,6 +7,7 @@ import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
 import { DebugPanel } from "./debug-panel";
 import { AudioUpload } from "./audio-upload";
+import { MicLevel } from "./mic-level";
 import { pushLog } from "@/lib/debug-log";
 
 const BATCH_SIZE = 2;
@@ -19,7 +20,7 @@ function getSttMode(): "stream" | "groq" {
 }
 
 export function LiveMode() {
-  const [sttMode] = useState<"stream" | "groq">(getSttMode);
+  const [sttMode, setSttMode] = useState<"stream" | "groq">(getSttMode);
   const whisper = useWhisperSpeech();
   const streaming = useStreamingSpeech();
   const useStream = sttMode === "stream" && streaming.isSupported;
@@ -110,6 +111,20 @@ export function LiveMode() {
     isProcessingRef.current = false;
   };
 
+  const handleUploadedTranscript = useCallback((text: string) => {
+    if (!text.trim()) return;
+    pushLog("info", "fact-check", "uploaded audio transcript queued", { textLen: text.length });
+    lastCheckedRef.current = "";
+    const sentences = text
+      .split(/(?<=[.!?])\s+/)
+      .filter((s) => s.trim().length > 5);
+    const unchecked = sentences.filter((s) => !checkedSentencesRef.current.has(s));
+    if (unchecked.length > 0) {
+      processingQueueRef.current.push(...unchecked);
+      processQueue();
+    }
+  }, [processQueue]);
+
   const handleTestApi = async () => {
     setIsTestingApi(true);
     setApiStatus(null);
@@ -144,9 +159,35 @@ export function LiveMode() {
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
         <strong>Debate Mode Active:</strong> Live streaming transcription
-        ({useStream ? "instant" : "Groq fallback — add ?stt=stream for instant"}).
+        ({useStream ? "instant" : "Groq fallback"}).
         Sentences are fact-checked automatically — newest at top. Open Debug Logs below to see
         live processing.
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setSttMode("stream")}
+          disabled={!streaming.isSupported}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            useStream
+              ? "bg-blue-500 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          } disabled:opacity-50`}
+          title={streaming.isSupported ? "Instant browser transcription" : "Not supported in this browser"}
+        >
+          Stream
+        </button>
+        <button
+          onClick={() => setSttMode("groq")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            !useStream
+              ? "bg-blue-500 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+          title="Groq Whisper transcription (3s chunks)"
+        >
+          Groq
+        </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -179,7 +220,15 @@ export function LiveMode() {
             Recording...
           </span>
         )}
+        <MicLevel active={isListening} />
       </div>
+
+      {isListening && (
+        <p className="text-xs text-gray-500">
+          Tip: playing audio out loud? Make sure it plays through speakers your mic can hear
+          (watch the Mic bar move) — or use Upload Audio below with the file directly.
+        </p>
+      )}
 
       {apiStatus && (
         <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 whitespace-pre-wrap">
@@ -240,7 +289,7 @@ export function LiveMode() {
 
       <DebugPanel />
 
-      <AudioUpload />
+      <AudioUpload onTranscribed={handleUploadedTranscript} />
 
       {(isChecking || pendingCount > 0) && (
         <div className="flex items-center gap-2 text-sm text-gray-600">

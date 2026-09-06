@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { pushLog } from "@/lib/debug-log";
 
-export function AudioUpload() {
+export function AudioUpload({ onTranscribed }: { onTranscribed?: (text: string) => void }) {
   const [transcript, setTranscript] = useState<string | null>(null);
   const [language, setLanguage] = useState<string | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -101,6 +101,14 @@ export function AudioUpload() {
         <div className="p-3 bg-gray-50 rounded border border-gray-200">
           <p className="text-xs text-gray-500 mb-1">Transcript {language && `(detected: ${language})`}:</p>
           <p className="text-sm text-gray-900 whitespace-pre-wrap">{transcript || "(empty)"}</p>
+          {transcript.trim() && onTranscribed && (
+            <button
+              onClick={() => onTranscribed(transcript)}
+              className="mt-2 px-3 py-1.5 rounded text-xs font-medium bg-green-500 text-white hover:bg-green-600"
+            >
+              Send to fact-check
+            </button>
+          )}
         </div>
       )}
     </div>

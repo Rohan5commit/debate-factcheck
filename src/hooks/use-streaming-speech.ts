@@ -33,6 +33,9 @@ export function useStreamingSpeech(): StreamingSpeechHook {
   const restartCountRef = useRef(0);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalRef = useRef("");
+  const noSpeechCountRef = useRef(0);
+
+  const MAX_SILENT_RESTARTS = 4;
 
   const isSupported = checkSupport();
 
@@ -75,10 +78,12 @@ export function useStreamingSpeech(): StreamingSpeechHook {
       interimText = interimText.trim();
       finalText = finalText.trim();
       if (interimText) {
+        noSpeechCountRef.current = 0;
         setInterim(interimText);
         setStatus(`Hearing: ${interimText.slice(0, 60)}`);
       }
       if (finalText) {
+        noSpeechCountRef.current = 0;
         finalRef.current = finalRef.current ? `${finalRef.current} ${finalText}` : finalText;
         setTranscript(finalRef.current);
         setInterim("");
@@ -93,7 +98,11 @@ export function useStreamingSpeech(): StreamingSpeechHook {
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       const err = event.error;
       if (err === "no-speech" || err === "audio-capture") {
-        pushLog("warn", "transcribe", "stream notice", { error: err });
+        const n = ++noSpeechCountRef.current;
+        pushLog("warn", "transcribe", "stream notice", { error: err, consecutiveSilent: n });
+        if (n === 2) {
+          setStatus("No speech detected — check mic volume and playback device. See tip below.");
+        }
         return;
       }
       if (err === "aborted" || err === "network") {
@@ -106,6 +115,22 @@ export function useStreamingSpeech(): StreamingSpeechHook {
 
     recognition.onend = () => {
       if (!isListeningRef.current) return;
+      if (noSpeechCountRef.current >= MAX_SILENT_RESTARTS) {
+        pushLog("error", "transcribe", "stopped after repeated silence", {
+          consecutiveSilent: noSpeechCountRef.current,
+        });
+        isListeningRef.current = false;
+        clearRestartTimer();
+        if (recognitionRef.current) {
+          recognitionRef.current = null;
+        }
+        setIsListening(false);
+        setInterim("");
+        setStatus(
+          "Stopped: mic heard only silence. Check mic volume and that playback uses speakers your mic can hear — or use Upload Audio with the file directly."
+        );
+        return;
+      }
       const n = ++restartCountRef.current;
       const delay = Math.min(200 * n, 2000);
       pushLog("info", "transcribe", "stream ended, restarting", { attempt: n, delayMs: delay });
@@ -123,6 +148,7 @@ export function useStreamingSpeech(): StreamingSpeechHook {
 
     recognitionRef.current = recognition;
     isListeningRef.current = true;
+    noSpeechCountRef.current = 0;
     try {
       recognition.start();
       setIsListening(true);
@@ -136,6 +162,7 @@ export function useStreamingSpeech(): StreamingSpeechHook {
   }, []);
 
   const stopListening = useCallback(() => {
+    const hadSpeech = finalRef.current.trim().length > 0;
     isListeningRef.current = false;
     clearRestartTimer();
     if (recognitionRef.current) {
@@ -146,14 +173,24 @@ export function useStreamingSpeech(): StreamingSpeechHook {
     }
     setIsListening(false);
     setInterim("");
-    setStatus(null);
-    pushLog("info", "system", "streaming stopped", {});
+    if (!hadSpeech) {
+      setStatus(null);
+      setError(
+        "No speech was captured — the mic heard only silence. Check mic volume and that playback uses speakers your mic can hear, or use Upload Audio with the file directly."
+      );
+      pushLog("error", "transcribe", "stopped with empty transcript", {});
+    } else {
+      setStatus(null);
+    }
+    pushLog("info", "system", "streaming stopped", { hadSpeech });
   }, []);
 
   const resetTranscript = useCallback(() => {
     finalRef.current = "";
+    noSpeechCountRef.current = 0;
     setTranscript("");
     setInterim("");
+    setError(null);
   }, []);
 
   return { isListening, transcript, interim, isSupported, error, status, startListening, stopListening, resetTranscript };
