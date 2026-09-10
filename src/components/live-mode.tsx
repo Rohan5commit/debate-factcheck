@@ -177,7 +177,7 @@ export function LiveMode() {
     <div className="space-y-4">
       <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
         <strong>Debate Mode Active:</strong> Groq Whisper transcription
-        (5-second chunks). Sentences are fact-checked automatically — newest at top.
+        (10-second chunks). Sentences are fact-checked automatically — newest at top.
         Open Debug Logs below to see live processing.
       </div>
 

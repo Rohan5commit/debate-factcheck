@@ -14,11 +14,11 @@ interface WhisperSpeechHook {
   resetTranscript: () => void;
 }
 
-const CHUNK_SECONDS = 5;
+const CHUNK_SECONDS = 10;
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 1;
 const SILENCE_RMS_THRESHOLD = 0.008;
-const OVERLAP_SECONDS = 0;
+const OVERLAP_SECONDS = 1.0;
 const MAX_QUEUE = 2;
 
 function checkSupport(): boolean {
@@ -224,22 +224,27 @@ export function useWhisperSpeech(): WhisperSpeechHook {
         let deduped = text;
         const tail = lastTranscriptTailRef.current;
         if (tail) {
-          const tailWords = tail.split(/\s+/).slice(-6).join(" ");
-          if (tailWords.length > 10 && deduped.toLowerCase().startsWith(tailWords.toLowerCase().slice(0, 20))) {
-            const idx = deduped.toLowerCase().indexOf(tailWords.toLowerCase().split(" ").slice(-2).join(" "));
-            if (idx > 0 && idx < 40) deduped = deduped.slice(idx).trim();
+          // Word-level suffix/prefix match: find longest run of tail's last
+          // words that opens the new chunk (1s overlap re-transcribed),
+          // and trim it so overlap text isn't duplicated.
+          const tailWords = tail.toLowerCase().split(/\s+/).slice(-12);
+          const headWords = deduped.split(/\s+/);
+          const headLower = headWords.map((w) => w.toLowerCase());
+          let trimWords = 0;
+          for (let n = Math.min(12, tailWords.length, headLower.length); n >= 2; n--) {
+            const tailSlice = tailWords.slice(-n).join(" ");
+            if (headLower.slice(0, n).join(" ") === tailSlice) {
+              trimWords = n;
+              break;
+            }
           }
-          const overlapPhrases = tail.split(/(?<=[.!?])\s+/).slice(-1)[0];
-          if (overlapPhrases && deduped.toLowerCase().includes(overlapPhrases.toLowerCase().slice(0, 15))) {
-            // no-op, keep as is but log
-          }
-        }
-        // simple duplicate prefix check: if deduped starts with tail's last 30 chars
-        if (tail && deduped.length > 0) {
-          const last30 = tail.slice(-30).toLowerCase();
-          const dedupLower = deduped.toLowerCase();
-          if (last30.length > 10 && dedupLower.startsWith(last30.slice(-15))) {
-            pushLog("info", "capture", "dedup trimmed overlap", { before: text.slice(0, 40), after: deduped.slice(0, 40) });
+          if (trimWords > 0) {
+            deduped = headWords.slice(trimWords).join(" ").trim() || deduped;
+            pushLog("info", "capture", "dedup trimmed overlap", {
+              trimmedWords: trimWords,
+              before: text.slice(0, 60),
+              after: deduped.slice(0, 60),
+            });
           }
         }
 
