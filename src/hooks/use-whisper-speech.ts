@@ -19,7 +19,22 @@ const TARGET_SAMPLE_RATE = 16000;
 const MAX_RETRIES = 1;
 const SILENCE_RMS_THRESHOLD = 0.008;
 const OVERLAP_SECONDS = 1.0;
-const MAX_QUEUE = 2;
+const MAX_QUEUE = 4;
+
+export const WHISPER_BUILD = {
+  chunkSeconds: CHUNK_SECONDS,
+  overlapSeconds: OVERLAP_SECONDS,
+  model: "whisper-large-v3",
+  maxQueue: MAX_QUEUE,
+} as const;
+
+function normalizeWord(w: string): string {
+  return w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function normalizeWords(s: string): string[] {
+  return s.split(/\s+/).map(normalizeWord).filter(Boolean);
+}
 
 function checkSupport(): boolean {
   return (
@@ -119,11 +134,12 @@ export function useWhisperSpeech(): WhisperSpeechHook {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const sampleBufferRef = useRef<Float32Array[]>([]);
-  const queueRef = useRef<Array<{ samples: Float32Array[]; rate: number }>>([]);
+  const queueRef = useRef<Array<{ samples: Float32Array[]; rate: number; chunkIndex: number }>>([]);
   const overlapRef = useRef<Float32Array | null>(null);
   const isListeningRef = useRef(false);
   const processingRef = useRef(false);
   const lastTranscriptTailRef = useRef<string>("");
+  const lastAppendRef = useRef<{ ts: number; norm: string } | null>(null);
   const chunkIndexRef = useRef(0);
   const visibilityHandlerRef = useRef<(() => void) | null>(null);
 
@@ -131,7 +147,8 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
   const transcribeChunk = async (
     samples: Float32Array[],
-    capturedRate: number
+    capturedRate: number,
+    chunkIndex?: number
   ): Promise<string | null> => {
     const totalLength = samples.reduce((sum, s) => sum + s.length, 0);
     const merged = new Float32Array(totalLength);
@@ -143,7 +160,11 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
     const rms = computeRMS(samples);
     if (rms < SILENCE_RMS_THRESHOLD) {
-      pushLog("info", "capture", "silence skip", { rms: rms.toFixed(4), samples: totalLength });
+      pushLog("info", "capture", "silence skip", {
+        rms: rms.toFixed(4),
+        durationSec: (totalLength / capturedRate).toFixed(2),
+        chunkIndex,
+      });
       return null;
     }
 
@@ -199,7 +220,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     processingRef.current = true;
 
     while (queueRef.current.length > 0) {
-      const { samples, rate } = queueRef.current.shift()!;
+      const { samples, rate, chunkIndex } = queueRef.current.shift()!;
       setStatus("Transcribing...");
 
       let text: string | null = null;
@@ -207,7 +228,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          text = await transcribeChunk(samples, rate);
+          text = await transcribeChunk(samples, rate, chunkIndex);
           succeeded = true;
           break;
         } catch (e) {
@@ -221,40 +242,72 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       }
 
       if (succeeded && text && text.length > 0) {
-        let deduped = text;
-        const tail = lastTranscriptTailRef.current;
-        if (tail) {
-          // Word-level suffix/prefix match: find longest run of tail's last
-          // words that opens the new chunk (1s overlap re-transcribed),
-          // and trim it so overlap text isn't duplicated.
-          const tailWords = tail.toLowerCase().split(/\s+/).slice(-12);
-          const headWords = deduped.split(/\s+/);
-          const headLower = headWords.map((w) => w.toLowerCase());
-          let trimWords = 0;
-          for (let n = Math.min(12, tailWords.length, headLower.length); n >= 2; n--) {
-            const tailSlice = tailWords.slice(-n).join(" ");
-            if (headLower.slice(0, n).join(" ") === tailSlice) {
-              trimWords = n;
-              break;
+        // Drop garbage: punctuation-only or near-empty Whisper output (e.g. ".").
+        const alnumCount = (text.match(/[\p{L}\p{N}]/gu) || []).length;
+        if (alnumCount < 3) {
+          pushLog("info", "capture", "skipped near-empty chunk text", { text });
+        } else {
+          let deduped = text;
+          const tail = lastTranscriptTailRef.current;
+          if (tail) {
+            // Punctuation-insensitive word-level suffix/prefix match: find the
+            // longest run of tail's last words that opens the new chunk (the
+            // 1s overlap re-transcribed) and trim it so it isn't duplicated.
+            const tailWords = normalizeWords(tail).slice(-12);
+            const headWords = text.split(/\s+/);
+            const headNorm = headWords.map(normalizeWord).filter(Boolean);
+            let trimNorm = 0;
+            for (let n = Math.min(12, tailWords.length, headNorm.length); n >= 2; n--) {
+              if (tailWords.slice(-n).join(" ") === headNorm.slice(0, n).join(" ")) {
+                trimNorm = n;
+                break;
+              }
+            }
+            if (trimNorm > 0) {
+              // Map trimmed normalized words back to raw word count (normalized
+              // list can be shorter if some raw tokens were punctuation-only).
+              let rawCut = 0;
+              let seen = 0;
+              for (let i = 0; i < headWords.length && seen < trimNorm; i++) {
+                if (normalizeWord(headWords[i])) seen++;
+                rawCut = i + 1;
+              }
+              deduped = headWords.slice(rawCut).join(" ").trim() || deduped;
+              pushLog("info", "capture", "dedup trimmed overlap", {
+                trimmedWords: trimNorm,
+                before: text.slice(0, 60),
+                after: deduped.slice(0, 60),
+              });
+            } else if (Math.min(tailWords.length, headNorm.length) >= 2) {
+              pushLog("info", "capture", "dedup miss", {
+                tailEnd: tailWords.slice(-6).join(" "),
+                headStart: headNorm.slice(0, 6).join(" "),
+              });
             }
           }
-          if (trimWords > 0) {
-            deduped = headWords.slice(trimWords).join(" ").trim() || deduped;
-            pushLog("info", "capture", "dedup trimmed overlap", {
-              trimmedWords: trimWords,
-              before: text.slice(0, 60),
-              after: deduped.slice(0, 60),
+
+          // Drop consecutive duplicate hallucinations (e.g. repeated "Thank you.")
+          // within 15s — same normalized text appended twice in a row.
+          const now = Date.now();
+          const normNew = normalizeWords(deduped).join(" ");
+          if (
+            normNew &&
+            lastAppendRef.current &&
+            now - lastAppendRef.current.ts < 15000 &&
+            lastAppendRef.current.norm === normNew
+          ) {
+            pushLog("info", "capture", "skipped duplicate append", { text: deduped.slice(0, 60) });
+          } else {
+            setTranscript((prev) => {
+              const trimmed = prev.trim();
+              const newText = trimmed ? `${trimmed} ${deduped}` : deduped;
+              lastTranscriptTailRef.current = deduped;
+              return newText;
             });
+            lastAppendRef.current = { ts: now, norm: normNew };
+            pushLog("info", "capture", "transcript appended", { textLen: deduped.length, deduped: deduped.length !== text.length });
           }
         }
-
-        setTranscript((prev) => {
-          const trimmed = prev.trim();
-          const newText = trimmed ? `${trimmed} ${deduped}` : deduped;
-          lastTranscriptTailRef.current = deduped;
-          return newText;
-        });
-        pushLog("info", "capture", "transcript appended", { textLen: deduped.length, deduped: deduped.length !== text.length });
       } else if (!succeeded) {
         pushLog("error", "transcribe", "chunk failed after retries, skipping", {});
         setStatus("Transcription failed — skipping chunk");
@@ -303,10 +356,15 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       remainder: sampleBufferRef.current.reduce((s, c) => s + c.length, 0),
     });
 
-    queueRef.current.push({ samples, rate });
+    queueRef.current.push({ samples, rate, chunkIndex });
     if (queueRef.current.length > MAX_QUEUE) {
       const dropped = queueRef.current.splice(0, queueRef.current.length - MAX_QUEUE);
-      pushLog("warn", "capture", "queue overflow, dropped oldest", { dropped: dropped.length, queueLen: queueRef.current.length, rate });
+      pushLog("warn", "capture", "queue overflow, dropped oldest", {
+        dropped: dropped.length,
+        droppedIndices: dropped.map((d) => d.chunkIndex),
+        queueLen: queueRef.current.length,
+        rate,
+      });
     }
     pushLog("info", "capture", "queued for transcription", { chunkIndex, queueLen: queueRef.current.length, rate });
     processQueue();
@@ -342,6 +400,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
       overlapRef.current = null;
       processingRef.current = false;
       chunkIndexRef.current = 0;
+      lastAppendRef.current = null;
 
       let useWorklet = false;
       let workletNode: AudioWorkletNode | null = null;
@@ -467,6 +526,7 @@ export function useWhisperSpeech(): WhisperSpeechHook {
     queueRef.current = [];
     overlapRef.current = null;
     lastTranscriptTailRef.current = "";
+    lastAppendRef.current = null;
     chunkIndexRef.current = 0;
   }, []);
 

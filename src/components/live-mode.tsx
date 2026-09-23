@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useWhisperSpeech } from "@/hooks/use-whisper-speech";
+import { useWhisperSpeech, WHISPER_BUILD } from "@/hooks/use-whisper-speech";
 import { useStreamingSpeech } from "@/hooks/use-streaming-speech";
 import { useFactCheck } from "@/hooks/use-fact-check";
 import { FactCheckCard } from "./fact-check-card";
@@ -24,6 +24,15 @@ export function LiveMode() {
   const whisper = useWhisperSpeech();
   const streaming = useStreamingSpeech();
   const useStream = sttMode === "stream" && streaming.isSupported;
+
+  useEffect(() => {
+    pushLog("info", "system", "build stamp", {
+      ...WHISPER_BUILD,
+      sttMode,
+      commit: process.env.NEXT_PUBLIC_COMMIT || "unknown",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const {
     isListening,
@@ -242,8 +251,9 @@ export function LiveMode() {
 
       {isListening && (
         <p className="text-xs text-gray-500">
-          Tip: playing audio out loud? Make sure it plays through speakers your mic can hear
-          (watch the Mic bar move) — or use Upload Audio below with the file directly.
+          Tip: speak directly into your mic for the most accurate transcript.
+          Playing audio through speakers degrades word accuracy — for recorded
+          files, use Upload Audio below instead.
         </p>
       )}
 
